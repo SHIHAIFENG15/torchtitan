@@ -25,10 +25,14 @@ from dataclasses import dataclass
 from typing import Literal, TYPE_CHECKING
 
 import torch
-from torch.distributed.pipelining import (
-    analyze_pipeline_activation_liveness,
-    PipelineStageInfo,
-)
+try:
+    from torch.distributed.pipelining import (
+        analyze_pipeline_activation_liveness,
+        PipelineStageInfo,
+    )
+except ImportError:  # torch 2.14.0 stable predates the PP Dist-MoE liveness APIs
+    analyze_pipeline_activation_liveness = None
+    PipelineStageInfo = None
 from torch.distributed.pipelining.schedules import PipelineScheduleMulti
 from torch.utils.hooks import RemovableHandle
 
