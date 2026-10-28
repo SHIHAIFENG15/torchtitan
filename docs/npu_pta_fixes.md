@@ -273,3 +273,19 @@ NotImplementedError: Could not run 'torchtitan::silu_and_mul' with arguments fro
 `torch_npu/_inductor/kernel/flex_attention.py` 的 mask-in 反向在非 Ascend 950 上把 `BLOCK_M1`、`BLOCK_N1`、`BLOCK_M2`、`BLOCK_N2` 默认设为 16。调用方如果已经指定了这些值，不会被覆盖。
 
 分块改成 16 之后，训练能打完前几步，但 inductor 的编译子进程池在后面的 step 里段错误退出（日志里有 `SubprocPool unclean exit`）。`env.sh` 里设置 `TORCHINDUCTOR_COMPILE_THREADS=1`，编译改在本进程做。这样 `muse_spark_debugmodel` 的 10 步可以跑完。
+
+`TORCHINDUCTOR_COMPILE_THREADS` 管的是 PyTorch 自己的编译进程池。`torch_npu` 另有 `precompile_thread_num`，默认至少 32，环境变量是 `TORCHNPU_PRECOMPILE_THREADS`。`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 flex attention 反向选块时，这个池子开了 128 个线程去测 `triton_per_fused_flex_attention_backward_0` 的 68 组配置，rank 0 段错误。`env.sh` 里把 `TORCHNPU_PRECOMPILE_THREADS` 也设成 1。
+
+## 9. 上下文并行的 block mask 求和被编成 simt_only
+
+`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 `_cp_shard` 里编译 `create_block_mask`。query 被 CP 切开后，mask 先垫到 128 的倍数，再按 `128 x 128` 的块求和。这个 reduction 走 `NPUTritonKernel`，元数据里的 `npu_kernel_type` 被写成 `simd_simt_mix`。选块时会先生成 `compile_mode="simt_only"`。910B4 不是 Ascend 950，Triton 直接拒绝这个模式，于是整组配置都算失败：
+
+```text
+NoTritonConfigsError: No valid triton configs for kernel
+triton_red_fused__to_copy_bitwise_and_eq_gt_lt_permute_sum_view_3
+ValueError: compile_mode="simt_only" is supported only on Ascend 950 targets.
+```
+
+第 2 节里那个孤立 `sum` 复现也停在同一句话，但当时训练在更前面就退出了，所以那次不是训练失败原因。这次训练自己走到了这个 kernel。
+
+`torch_npu/_inductor/runtime/triton_heuristics.py` 里，非 Ascend 950 不再为 `simd_simt_mix` 生成 `simt_only` 配置，只保留 `simd_simt_template`。910B 上这个模式走普通 SIMD。用动态长度 256、key 长度 512 的 bool mask 编译同一段 view、permute、sum，结果和 eager 一致。

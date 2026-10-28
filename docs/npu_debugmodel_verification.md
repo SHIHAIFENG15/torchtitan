@@ -87,4 +87,7 @@ rank 0 的数：
 
 第 1 项的配置和整条训练循环，按 4 卡默认配方已经跑通。四个验证要点都有运行迹象，都还没有和参考数值对上。
 
-清单第 2 到第 5 项（上下文并行、Dist-MoE、多模态、32K LoRA）这次没有跑。
+清单第 3 到第 5 项（Dist-MoE、多模态、32K LoRA）这次没有跑。第 2 项的三条配方里，`muse_spark_debugmodel_fsdp2_cp2_ep4` 已在 2026-10-28 用 2、3、4、5 号卡跑完 10 步，退出码 0。网格是 `dp_shard=2, cp=2, tp=1, ep=4`。rank 0 的 loss 从 7.76808 到 5.02892，grad_norm 从 4.6650 到 1.6260，10 步都是有限值。另外两条按代码是 8 卡（`with_cp` 在基类的 `dp_shard=2, tp=2` 上再加 `cp=2`；多模态那条是 `dp_shard=2, tp=2, cp=2`），当时 0 号和 1 号卡被别的任务占用，没有启动。
+
+
+`muse_spark_debugmodel_with_cp` 随后在 2026-10-28 07:14 UTC 用 8 张卡启动（`NGPU=8 ./run_train.sh`，日志 `item2_logs/with_cp.log`）。进程起来后停在 `_StridedShard(dim=0) + Shard(dim=0)` 到 `Replicate` 的两次 all_gather，日志从 07:22 UTC 起不再增长。8 个 rank 的 AICore 一直是 0，CPU 在 HCCL 里空转。4 号卡当时被别人的 `rn50_grad_probe.py` 占满（AICore 99%，`ASCEND_RT_VISIBLE_DEVICES=4`，停在 inductor autotune）。这次 8 卡任务没有跑完 10 步，已在约 08:25 UTC 停掉。0 号卡上还有别人的 `pytest test_perf.py`。4 号卡空出来之前，这条 8 卡配方不能重跑。多模态那条 `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4` 仍然没启动。
