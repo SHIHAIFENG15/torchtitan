@@ -289,3 +289,65 @@ ValueError: compile_mode="simt_only" is supported only on Ascend 950 targets.
 第 2 节里那个孤立 `sum` 复现也停在同一句话，但当时训练在更前面就退出了，所以那次不是训练失败原因。这次训练自己走到了这个 kernel。
 
 `torch_npu/_inductor/runtime/triton_heuristics.py` 里，非 Ascend 950 不再为 `simd_simt_mix` 生成 `simt_only` 配置，只保留 `simd_simt_template`。910B 上这个模式走普通 SIMD。用动态长度 256、key 长度 512 的 bool mask 编译同一段 view、permute、sum，结果和 eager 一致。
+
+## 10. 视觉 RoPE 的 complex64 下标
+
+8 卡多模态配方 `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4` 第一轮停在：
+
+```text
+RuntimeError: index_high_dims_op_api aclnnIndex 161002
+DT_COMPLEX64
+vision_encoder.py: freqs_cis_GD[sp_perm]
+```
+
+`49cbb4d` 修的是 `rope.py` 的 `_reshape_for_broadcast`。视觉编码器在 sparse attention 里直接对 complex64 的频率缓存做下标，不经过那个函数。910B 的 index 没有 complex64。
+
+`torchtitan/models/muse_spark/vision_encoder.py` 在 NPU 上改成先 `view_as_real`，按下标取出实部虚部，再 `view_as_complex`。其它设备仍走原来的下标。
+
+## 11. 反向重算里的空指针占位张量
+
+视觉下标改完之后，训练能打完第 1 步，随后某个 rank 以 SIGSEGV（exit -11）退出。`faulthandler` 的当前线程停在：
+
+```text
+torch_remat/_placeholder.py: _make_placeholder_tensor
+  placeholder.set_(null_storage, ...)
+torchtitan/models/common/linear/linear.py: maybe_gather_tp_input
+```
+
+这是 TP 的 remat 区域在反向重算时，给一个没有保存的输出造占位张量。占位张量用 `torch._C._construct_storage_from_data_pointer(0, device, nbytes)`，再 `set_` 成真实形状。CPU 和 CUDA 上这个空指针只在读数据时抛错。910B 的缓存分配器要给每块存储做 32 字节对齐，会碰到这个空指针，进程段错误。单独在一张卡上对同样的形状调用 `set_` 可以成功，所以不是某个 shape 写错了。4 卡那条没有 TP，不会走进 `maybe_gather_tp_input`，所以之前没撞上。
+
+`torch_remat/_placeholder.py` 在 `device.type == "npu"` 时改为 `empty_strided` 分配真实存储，再用原来的 `_set_storage_data_ptr_access_error_msg` 禁止读数据。读到占位张量仍然抛 RuntimeError。其它设备仍用空指针，不占那块显存。
+
+## 12. 8 个 rank 同时给 flex attention 反向选块
+
+占位张量改完之前，还有一种段错误没有 Python 异常：一个 rank 在 `triton_per_fused_flex_attention_backward_0` 的几十组候选里退出（exit -11），其余 rank 被 SIGTERM。同一形状在单卡上前向反向都能算出有限梯度。视觉序列一例是 1460，head_dim 16，2 个本地 head。文本一例是 query `1x4x256x32`、KV `1x2x512x32`。崩的 rank 每次不一样。
+
+尝试过在选块时直接拿最小的 runtime tile。launcher 和 runtime block 对不上，进程以 `realloc(): invalid pointer` / `munmap_chunk(): invalid pointer` 中止。这处改动已撤掉。
+
+留下的改法在 `torch_npu/_inductor/runtime/triton_heuristics.py`：名字里带 `flex_attention` 的 autotune 用 `fcntl.flock` 锁住 `/tmp/npu_flex_attention_autotune.lock`，同一时刻只有一个进程在跑候选。同进程重入用深度计数，避免自己把自己锁死。候选本身仍按原来的计时挑选，不改分块。
+
+## 13. 短视觉序列的 flex decoding 和 100 秒超时
+
+第 1 到第 4 步能打完之后，第 5 步视觉 token 数变成 4。inductor 改走 flex decoding（query 长度小于 128）。rank 0 还在编译，另一个 rank 已经发出 all-gather。第 1 步之后进程组超时是 `train_timeout_seconds=100`。大约 100 秒后：
+
+```text
+Watchdog caught collective operation timeout:
+WorkHCCL(OpType=ALLGATHER, NumelIn=15856, NumelOut=31712, Timeout(ms)=100000)
+```
+
+HCCL watchdog 把还在集合通信里的 rank 打成 SIGABRT（exit -6）。`NumelOut` 是 `NumelIn` 的 2 倍，对应 TP=2 的 all-gather。
+
+两处一起改：
+
+- `torch_npu/_inductor/kernel/flex_attention.py` 的 `_use_flex_decoding` 在非 Ascend 950 上直接返回 false。短序列继续用已经能跑的 mask-in flex attention，不再编一套 decoding 核。
+- `tests/integration_tests/models.py` 里这条 8 卡配方把 `comm.train_timeout_seconds` 设为 1800。新的视觉长度仍会重新编译，第 5 步和第 8 步各花了大约一分钟，100 秒盖不住，1800 秒盖得住。
+
+## 14. 词表断言和 FSDP 的 view 输出
+
+`torchtitan/components/loss.py` 里，`_LossParallelCrossEntropy` 的 `torch._assert_async` 在 `torch.compiler.is_compiling()` 时跳过。910B 的 inductor 编不出这个 0 维 device 断言，会停在编译里。eager 时检查还在。
+
+`NaViTEncoder.forward` 末尾，单帧时 `torch.cat` 返回的就是那一帧，FSDP 把它看成 view，就地算子会丢掉 pre-backward all-gather。返回值改成 `torch.cat(outputs).contiguous()`。音频编码器和文本 block 的同类警告这次没有改调用点。
+
+## 15. 8 卡多模态 10 步
+
+上面几处都在的那次运行是 2026-10-28 的 `item2_logs/mm_r12.log`。10 步结束，日志有 `Training completed`。rank 0 的 loss 从 7.66202 到 4.68848，grad_norm 从 9.4633 到 3.0236，逐步数字在 `docs/npu_debugmodel_verification.md`。没有和参考 loss 对过。
