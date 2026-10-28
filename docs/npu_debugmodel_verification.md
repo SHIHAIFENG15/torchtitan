@@ -90,4 +90,46 @@ rank 0 的数：
 清单第 3 到第 5 项（Dist-MoE、多模态、32K LoRA）这次没有跑。第 2 项的三条配方里，`muse_spark_debugmodel_fsdp2_cp2_ep4` 已在 2026-10-28 用 2、3、4、5 号卡跑完 10 步，退出码 0。网格是 `dp_shard=2, cp=2, tp=1, ep=4`。rank 0 的 loss 从 7.76808 到 5.02892，grad_norm 从 4.6650 到 1.6260，10 步都是有限值。另外两条按代码是 8 卡（`with_cp` 在基类的 `dp_shard=2, tp=2` 上再加 `cp=2`；多模态那条是 `dp_shard=2, tp=2, cp=2`），当时 0 号和 1 号卡被别的任务占用，没有启动。
 
 
-`muse_spark_debugmodel_with_cp` 随后在 2026-10-28 07:14 UTC 用 8 张卡启动（`NGPU=8 ./run_train.sh`，日志 `item2_logs/with_cp.log`）。进程起来后停在 `_StridedShard(dim=0) + Shard(dim=0)` 到 `Replicate` 的两次 all_gather，日志从 07:22 UTC 起不再增长。8 个 rank 的 AICore 一直是 0，CPU 在 HCCL 里空转。4 号卡当时被别人的 `rn50_grad_probe.py` 占满（AICore 99%，`ASCEND_RT_VISIBLE_DEVICES=4`，停在 inductor autotune）。这次 8 卡任务没有跑完 10 步，已在约 08:25 UTC 停掉。0 号卡上还有别人的 `pytest test_perf.py`。4 号卡空出来之前，这条 8 卡配方不能重跑。多模态那条 `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4` 仍然没启动。
+`muse_spark_debugmodel_with_cp` 随后在 2026-10-28 07:14 UTC 用 8 张卡启动（`NGPU=8 ./run_train.sh`，日志 `item2_logs/with_cp.log`）。进程起来后停在 `_StridedShard(dim=0) + Shard(dim=0)` 到 `Replicate` 的两次 all_gather，日志从 07:22 UTC 起不再增长。8 个 rank 的 AICore 一直是 0，CPU 在 HCCL 里空转。4 号卡当时被别人的 `rn50_grad_probe.py` 占满（AICore 99%，`ASCEND_RT_VISIBLE_DEVICES=4`，停在 inductor autotune）。这次 8 卡任务没有跑完 10 步，已在约 08:25 UTC 停掉。0 号卡上还有别人的 `pytest test_perf.py`。4 号卡空出来之前，这条 8 卡配方不能重跑。多模态那条随后单独跑通，见下一节。
+
+## 8 卡多模态 debugmodel
+
+清单第 2 项里标成 8 卡的配方是 `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4`。2026-10-28 11:02–11:07 UTC 在 8 张 910B4 上跑完 10 步。日志 `item2_logs/mm_r12.log` 以 `Training completed` 和 `Process group destroyed` 结束，没有 `ChildFailedError`。
+
+启动：
+
+```text
+source /workspace/env.sh
+NGPU=8 MODULE=tests.integration_tests.models \
+  CONFIG=muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4 ./run_train.sh
+```
+
+网格是 `pp=1, dp_replicate=1, dp_shard=2, cp=2, tp=2, ep=4`。EP 从这 8 个进程里分专家，不另加进程。`2 × 2 × 2 = 8`。序列 512，10 步。文本 dim 256、8 层、8 专家、词表 2048。视觉是 NaViT，head_dim 16。数据是 `tests/assets/cc12m_test/cc12m-train-0000.tar` 加合成音频、视频。第 1 步之后进程组超时从默认 100 秒改成 1800 秒，日志是 `Synchronizing and adjusting timeout for all ProcessGroups to 0:30:00`。
+
+rank 0 的数。loss 和 grad_norm 是归约后的全局值。第 5 步和第 8 步 tps 掉到 2 和 1，是新的视觉 token 长度在重新编译 flex attention，不是算子挂住。
+
+| step | loss | grad_norm |
+| --- | --- | --- |
+| 1 | 7.66202 | 9.4633 |
+| 2 | 6.83399 | 6.2513 |
+| 3 | 5.79272 | 4.1767 |
+| 4 | 6.22080 | 5.1368 |
+| 5 | 4.33259 | 4.8085 |
+| 6 | 5.80127 | 3.5880 |
+| 7 | 5.17229 | 2.9730 |
+| 8 | 3.40500 | 2.9641 |
+| 9 | 3.98423 | 2.8151 |
+| 10 | 4.68848 | 3.0236 |
+
+第 1 步 7.66202，和 `ln(2048) = 7.6246` 差 0.037，尺度仍像平均交叉熵。后面有降有升，打包的图、音频、视频每步长度不同，不能单独当成和参考实现对上了。`checkpointer` 是空的，没有存权重，参数差没有直接量。10 步 grad_norm 都是有限值，没有变成 0。
+
+这次能跑完，靠的是下面几处改动，细节在 `docs/npu_pta_fixes.md` 第 10 节起：
+
+- 视觉 RoPE 的 complex64 下标不走 `rope.py` 那一处，910B 的 index 没有 complex64。
+- `torch_remat` 在 NPU 上不再用空指针 storage 做占位张量。空指针在反向重算里会段错误。
+- 8 个 rank 一起给 flex attention 反向选块时，会有一个 rank 段错误。选块改成跨进程串行。
+- 非 Ascend 950 不用 flex decoding。短视觉序列会另编一套核，编译时间超过原来的 100 秒训练超时，先跑完的 rank 把 all-gather 拖超时，HCCL watchdog 以 SIGABRT 退出。
+- 这条配方的 `train_timeout_seconds` 设为 1800，盖住第 5 步、第 8 步那种新长度编译。
+- 单帧 `torch.cat` 得到的是原张量。视觉编码器返回前做了 `contiguous()`，避免 FSDP 把输出当成 view 丢掉 pre-backward all-gather。
+
+没有和一份参考 loss 对过。这次只说明 8 卡多模态 debugmodel 的 10 步训练循环能走完。
