@@ -39,6 +39,8 @@ GPU 机器上的环境、四项缺数和取数步骤写在 `docs/gpu_baseline_se
 
 第 3 行 bf16 的两次对照在 2026-10-30，见下文第 3 行。mxfp8 没有样本。
 
+第 4 行 `muse_spark_debugmodel_mm` 的两次对照也在 2026-10-30，见下文第 4 行。网格是清单上的 EP2、Ulysses，不是第 2 行③的 EP4、AllGatherKV。
+
 ### 第 1 行
 
 `muse_spark_debugmodel`，网格 `dp_shard=2, tp=2, ep=2`。`det_debugmodel_r04_r1/r2.log`，两次 loss、grad_norm 逐项相同，并且和旧日志 `item2_logs/det_debugmodel_r1.log` 的 10 步完全相同。
@@ -451,18 +453,37 @@ mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 | 项 | 内容 |
 | --- | --- |
 | 工作项 | 适配 NaViT 视觉编码器与音频编码器，验证 `dataset_modalities` 静态参与、dummy 输入零值依赖，以及 bank indices 与 token 分片对齐 |
-| 配方 | `muse_spark_debugmodel_mm`（`muse_spark.py` 约 195 行） |
-| 清单并行 | 8 卡：DP2 × TP2 × CP2 × EP2，CP 固定为 2 |
-| 备注 | 数据为 CC12M 真实图像 + 合成视频 + 合成音频。编码器每步必执行，无媒体时走 dummy 输入 |
-| 结果 | 这条名字本身没跑。跑完的是第 2 行③里 EP=4 的多模态变体，数据路径同一套 |
+| 配方 | `muse_spark_debugmodel_mm` |
+| 清单并行 | 8 卡：DP2 × TP2 × CP2 × EP2，CP 固定为 2。这次网格是 `pp=1, dp_replicate=1, dp_shard=2, cp=2, tp=2, ep=2`，上下文并行是 Ulysses |
+| 备注 | 数据为 CC12M 真实图像 + 合成视频 + 合成音频。编码器每步必执行，无媒体时走 dummy 输入。配方把 `train_timeout_seconds` 设为 1800，否则新的视觉长度编译会超过默认 100 秒 |
+| 结果 | 跑通。两次 loss、grad_norm 相同 |
+
+环境与前面几行相同：`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`，`NGPU=8`，模块 `torchtitan_recipes.tests.models.muse_spark`，配置 `muse_spark_debugmodel_mm`。启动前 8 张卡都空着。日志 `/workspace/det_mm_ep2_r1.log`（2026-10-30 08:47:43–08:52:04 UTC）和 `r2.log`（08:53:02–08:54:45 UTC）。两趟都有 `Training completed` 和 `Process group destroyed`。r1 有一条 `Sample length 649 > training max_context_length=512. Skip`。
+
+| step | loss | grad_norm | r1 memory | r1 tps | r2 memory | r2 tps |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 7.69125 | 9.7405 | 0.07GiB (0.25%) | 1 | 0.07GiB (0.25%) | 3 |
+| 2 | 6.81713 | 6.5383 | 0.12GiB (0.42%) | 19 | 0.12GiB (0.42%) | 22 |
+| 3 | 5.68443 | 4.2879 | 0.12GiB (0.42%) | 119 | 0.12GiB (0.42%) | 115 |
+| 4 | 6.06900 | 4.9316 | 0.12GiB (0.42%) | 125 | 0.12GiB (0.42%) | 122 |
+| 5 | 4.36464 | 5.0541 | 0.12GiB (0.42%) | 24 | 0.12GiB (0.42%) | 12 |
+| 6 | 5.61337 | 3.8197 | 0.12GiB (0.42%) | 108 | 0.12GiB (0.42%) | 26 |
+| 7 | 4.97801 | 3.1647 | 0.12GiB (0.42%) | 124 | 0.12GiB (0.42%) | 68 |
+| 8 | 3.39901 | 3.0696 | 0.12GiB (0.42%) | 24 | 0.12GiB (0.42%) | 12 |
+| 9 | 3.96171 | 2.7995 | 0.12GiB (0.42%) | 122 | 0.12GiB (0.42%) | 43 |
+| 10 | 4.57818 | 2.7223 | 0.12GiB (0.42%) | 123 | 0.12GiB (0.42%) | 65 |
+
+第 1、5、8 步 tps 掉下去，和第 2 行③一样，是新的视觉长度在编译 flex attention。去掉这三步后，r1 第 3、4、6、7、9、10 步 tps 在 108 到 125，平均约 120。非数据并行规模是 CP×TP×PP=4，`512 / (120 × 4)` 约 1.1 秒，和这 6 步的日志间隔一致。r2 同样去掉这三步之后，第 6、7、9、10 步 tps 只有 26、68、43、65，没有 r1 稳。tflops 0.00，mfu 0.00%。
+
+和第 2 行③的 EP4、AllGatherKV 数字接近但不是同一条。那次第 1 步 loss 是 7.67449，这次是 7.69125。
 
 | 要点 | 结果 |
 | --- | --- |
-| dataset_modalities 静态参与 | 变体跑完 10 步，说明图像、视频、音频打包进了训练。没有打印每个模态是否每步都出现 |
+| dataset_modalities 静态参与 | 10 步走完，图像、视频、音频按配方打包。没有打印每个模态是否每步都出现。超长样本被跳过 |
 | dummy 输入零值依赖 | 没有单独构造「无媒体」batch，也没有核对 dummy 是否为 0 |
 | bank indices 与 token 分片对齐 | 没有打印 bank index 和 token 分片。10 步 loss 有限只说明没有在这里崩溃 |
 
-清单上的网格是 EP2，和第 2 行③的 EP4 不是同一条。变体的 loss 表、编译步和环境见第 2 行③，不能把那次 10 步算成这一行验收通过。精度、性能、内存、确定性都还没有按这一行的网格量过。
+精度：没有 GPU 的 1000 步基线。第 1 步 7.69125，离 `ln(2048)` 差 0.067。grad_norm 从 9.7405 到 2.7223，全程有限。性能：r1 稳定段单卡 tps 约 120，没有同配方 4 卡，线性度算不出来。内存：第 1 步 0.07GiB，其后 0.12GiB，是这一步窗口里的最大预留，占日志容量 0.42%。确定性：两次 loss、grad_norm 相同；tps 不同。
 
 ---
 

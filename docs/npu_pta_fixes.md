@@ -385,3 +385,11 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 `muse_spark_debugmodel_dist_moe_bf16` 在 `_with_dist_moe` 之后把 `disable_cuda_graphs` 设回 True。910B 没有 CUDA graph。`local_compile_regions` 收回 `loss`、`fp32_to_bf16_split`，`train_timeout_seconds=1800`。网格仍是基类的 4 卡 `dp_shard=2, tp=2, ep=2`。
 
 2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=4`，同一配置连跑两次（`/workspace/dist_moe_bf16_r2.log`、`r3.log`）。10 步 loss、grad_norm 逐项相同，loss 从 7.68369 到 5.36020，grad_norm 从 2.7578 到 1.6899。两趟都有 `Training completed` 和 `Process group destroyed`。逐步数字在 `docs/npu_debugmodel_verification.md` 第 3 行。没有 GPU 1000 步基线。mxfp8 和压缩 MoE 没有样本。
+
+## 17. 第 4 行多模态配方的训练超时
+
+`muse_spark_debugmodel_mm` 是清单第 4 行：8 卡 `dp_shard=2, tp=2, cp=2, ep=2`，Ulysses。视觉 token 长度一变，flex attention 就要重新编译。第 2 行③那条 EP4、AllGatherKV 的变体已经在 `tests/integration_tests/models.py` 里把 `train_timeout_seconds` 设成 1800，因为编译超过默认 100 秒时，先跑完的 rank 会把 all-gather 拖到 HCCL watchdog 超时。
+
+清单上的这份配方原来没有设这个超时。`torchtitan_recipes/tests/models/muse_spark.py` 的 `muse_spark_debugmodel_mm` 在返回前补上 `config.comm.train_timeout_seconds = 1800`。其它字段没改，融合 SwiGLU override 仍在。
+
+2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=8`，连跑两次（`/workspace/det_mm_ep2_r1.log`、`r2.log`）。网格是 `dp_shard=2, cp=2, tp=2, ep=2`。10 步 loss、grad_norm 逐项相同，loss 从 7.69125 到 4.57818，grad_norm 从 9.7405 到 2.7223。逐步数字在 `docs/npu_debugmodel_verification.md` 第 4 行。没有单独打印每个模态、dummy 是否为 0、bank index 和 token 分片。

@@ -292,6 +292,9 @@ def muse_spark_debugmodel_mm(
     )
     if context_parallel_transform is None:
         context_parallel_transform = _muse_spark_context_parallel_transform()
+    # A new packed-vision length recompiles flex attention. On 910B that
+    # exceeds the default 100s training collective timeout.
+    config.comm.train_timeout_seconds = 1800
     return apply_transforms(
         config,
         [context_parallel_transform],
