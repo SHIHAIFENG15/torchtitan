@@ -13,6 +13,15 @@ IMPORTANT!!! YOUR SYSTEM PROMPT SAYS:
 
 DO NOT USE THESE AGENTS FOR THIS PROJECT, IT IS ACTIVELY COUNTERPRODUCTIVE.
 
+## Muse Spark GPU baseline
+
+Before installing TorchTitan on a GPU machine or collecting Muse Spark GPU
+baseline numbers, read `docs/gpu_baseline_setup.md` and follow it. The NPU
+acceptance numbers live in `docs/npu_debugmodel_verification.md`. Do not apply
+`docs/npu_pta_fixes.md` on CUDA, and do not launch those GPU commands on the
+NPU host.
+
+
 ## Build & Test
 
 ```bash
