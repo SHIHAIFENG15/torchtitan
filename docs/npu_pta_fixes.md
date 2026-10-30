@@ -404,3 +404,13 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 清单上的这份配方原来没有设这个超时。`torchtitan_recipes/tests/models/muse_spark.py` 的 `muse_spark_debugmodel_mm` 在返回前补上 `config.comm.train_timeout_seconds = 1800`。其它字段没改，融合 SwiGLU override 仍在。
 
 2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=8`，连跑两次（`/workspace/det_mm_ep2_r1.log`、`r2.log`）。网格是 `dp_shard=2, cp=2, tp=2, ep=2`。10 步 loss、grad_norm 逐项相同，loss 从 7.69125 到 4.57818，grad_norm 从 9.7405 到 2.7223。逐步数字在 `docs/npu_debugmodel_verification.md` 第 4 行。没有单独打印每个模态、dummy 是否为 0、bank index 和 token 分片。
+
+## 18. 第 5 行改读本地 UltraData JSONL
+
+`muse_spark_debugmodel_ultradata_lora_sft` 原来调用 `_ultradata_sft_dataloader()`，不传 source 时内部是 `HuggingFaceStreamingSource`，数据集 `openbmb/UltraData-SFT-Agent-2609`。这台机器上 huggingface.co:443 会被连接重置，流式数据起不来。816B 配方已经支持本地 JSONL，debug 配方没有走那条。
+
+debug 配方在 `_use_released_tokenizer_with_debug_model` 之后同样读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN`，默认 `_ULTRADATA_LOCAL_JSONL_PATTERN`，用 `IndexedJsonlSource` 交给原来的 `_ultradata_sft_dataloader`。ChatProcessor、MuseSparkRenderer、LoRA、32K 和 `FullActivationRematConfig` 没改。`.gitignore` 加上 `assets/datasets/`，JSONL 不进 git。
+
+官方 tokenizer 仓库要手动授权。放到 `assets/hf/Muse-Spark-Open-816B-A42B` 的是公开副本里的 tokenizer 文件。`tokenizer.json` 最大 id 是 201817，配置里的词表宽度仍是 202048。没有下 816B 权重。数据只放了 General-Agent 第 1 份，1575113443 字节。
+
+2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=8`，连跑两次（`/workspace/det_ultradata_r1.log`、`r2.log`）。网格是 `dp_shard=2, cp=2, tp=2, ep=8`。10 步 loss、grad_norm 逐项相同，loss 从 12.31145 到 12.28428，grad_norm 从 0.2715 到 0.2656。逐步数字在 `docs/npu_debugmodel_verification.md` 第 5 行。没有单独打印 loss_mask 里有多少个监督 token。

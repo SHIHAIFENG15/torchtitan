@@ -14,6 +14,7 @@ from torchtitan.components.data import (
     ConcatThenSplitPackingConfig,
     DatasetMixConfig,
     GrainDataLoader,
+    IndexedJsonlSource,
     WeightedDataset,
 )
 from torchtitan.components.data.text_datasets import DATASETS
@@ -51,6 +52,7 @@ from torchtitan_recipes.models.muse_spark import (
     _ultradata_lora_sft_optim,
     _ultradata_lora_sft_transform,
     _ultradata_sft_dataloader,
+    _ULTRADATA_LOCAL_JSONL_PATTERN,
     _with_dist_moe,
     MUSE_SPARK_SPECIAL_TOKENS,
 )
@@ -320,7 +322,14 @@ def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
     """Configure ten-step UltraData LoRA SFT with a debug model on 8 GPUs."""
     config = muse_spark_debugmodel_with_cp(seq_len=32_768)
     _use_released_tokenizer_with_debug_model(config)
-    config.dataloader = _ultradata_sft_dataloader()
+    # huggingface.co is reset from this machine. Read the staged JSONL, the
+    # same default the 816B recipe uses.
+    jsonl_pattern = os.environ.get(
+        "MUSE_SPARK_ULTRADATA_JSONL_PATTERN", _ULTRADATA_LOCAL_JSONL_PATTERN
+    )
+    config.dataloader = _ultradata_sft_dataloader(
+        IndexedJsonlSource.Config(patterns=(jsonl_pattern,))
+    )
     config.optim = _ultradata_lora_sft_optim(warmup_steps=2)
     config.training = TrainingConfig(
         num_tokens_per_microbatch_per_dp_rank=32_768,

@@ -18,6 +18,7 @@ torchtitan/datasets/**/*.model
 # hf assets
 assets/hf/*
 assets/tokenizer/*
+assets/datasets/
 
 # temp files
 *.log

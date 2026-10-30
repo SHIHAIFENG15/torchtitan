@@ -492,17 +492,40 @@ mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 | 项 | 内容 |
 | --- | --- |
 | 工作项 | 适配 32K 序列、真实 tokenizer、renderer 与 LoRA，验证 ChatProcessor 的 assistant-only label masking 与全量激活重算路径 |
-| 配方 | `muse_spark_debugmodel_ultradata_lora_sft`（`muse_spark.py` 约 284 行） |
-| 清单并行 | 8 卡：DP2 × TP2 × CP2 × EP8；seq_len 32768 |
-| 备注 | 唯一使用真实 MuseSparkTokenizer 的 debug 配置（vocab 202048）。强制 `FullActivationRematConfig`。这条会调用 `with_cp(seq_len=32768)` |
-| 结果 | 没跑 |
+| 配方 | `muse_spark_debugmodel_ultradata_lora_sft` |
+| 清单并行 | 8 卡：DP2 × TP2 × CP2 × EP8。这次网格是 `pp=1, dp_replicate=1, dp_shard=2, cp=2, tp=2, ep=8`，上下文并行是 Ulysses |
+| 备注 | debug 模型，词表宽度按 816B 写成 202048。`FullActivationRematConfig`，LoRA rank 8、alpha 16。数据是本地 JSONL，不是 Hugging Face 流 |
+| 结果 | 跑通。两次 loss、grad_norm 相同 |
+
+本机容器访问 huggingface.co:443 会被连接重置。debug 配方原来固定走 `HuggingFaceStreamingSource`。改成和 816B 配方一样，读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN`，默认 `./assets/datasets/muse_spark_ultradata/General_Agent_part-*.jsonl`。只放了 `openbmb/UltraData-SFT-Agent-2609` 的 General-Agent 第 1 份，`General_Agent_part-01-of-32.jsonl`，大小 1575113443 字节。dataloader 有 `repeat=True`，10 步用不完这一份，没有下另外 31 份。`assets/datasets/` 已加入 `.gitignore`。
+
+tokenizer 放在 `./assets/hf/Muse-Spark-Open-816B-A42B`。官方仓库 `meta-models/Muse-Spark-Open-816B-A42B` 要手动授权，匿名拉取 tokenizer 是 403。用的是公开副本 `unsloth/Muse-Spark-Open-816B-A42B` 的 tokenizer 文件，没有下权重。`tokenizer.json` 里 BPE 200000 个，added token 1818 个，id 从 0 到 201817，合计 201818。代码和 `config.json` 仍把 embedding、lm_head、loss 词表写成 202048，比 tokenizer 最大 id 多 230。日志是 `Loading tokenizer from tokenizer.json`。
+
+环境与前面几行相同：`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`，`NGPU=8`，模块 `torchtitan_recipes.tests.models.muse_spark`，配置 `muse_spark_debugmodel_ultradata_lora_sft`。启动前 8 张卡都空着。日志 `/workspace/det_ultradata_r1.log`（2026-10-30 10:44:00–11:15:50 UTC）和 `r2.log`（11:16:56–11:22:54 UTC）。两趟都有 `Training completed` 和 `Process group destroyed`。HCCL execution timeout 日志是 1836000ms，`train_timeout_seconds=1800` 生效了。启动超时仍是 300 秒。
+
+| step | loss | grad_norm | r1 memory | r1 tps | r2 memory | r2 tps |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 12.31145 | 0.2715 | 4.43GiB (15.04%) | 5 | 4.24GiB (14.37%) | 73 |
+| 2 | 12.31274 | 0.2676 | 4.32GiB (14.65%) | 360 | 4.30GiB (14.57%) | 338 |
+| 3 | 12.31039 | 0.3027 | 4.32GiB (14.65%) | 282 | 4.30GiB (14.57%) | 282 |
+| 4 | 12.30229 | 0.3203 | 4.32GiB (14.65%) | 321 | 4.30GiB (14.57%) | 332 |
+| 5 | 12.27736 | 0.3633 | 4.32GiB (14.65%) | 351 | 4.30GiB (14.57%) | 350 |
+| 6 | 12.28796 | 0.3613 | 4.32GiB (14.65%) | 378 | 4.30GiB (14.57%) | 354 |
+| 7 | 12.27721 | 0.3223 | 4.32GiB (14.65%) | 321 | 4.30GiB (14.57%) | 334 |
+| 8 | 12.26652 | 0.3691 | 4.32GiB (14.65%) | 367 | 4.30GiB (14.57%) | 359 |
+| 9 | 12.28093 | 0.3398 | 4.32GiB (14.65%) | 394 | 4.30GiB (14.57%) | 396 |
+| 10 | 12.28428 | 0.2656 | 4.32GiB (14.65%) | 346 | 4.30GiB (14.57%) | 346 |
+
+r1 第 1 步的 preprocess 花了 873 秒，`forward_backward` 计时 1653 秒，这段计时把 preprocess 包在里面，剩下大约 13 分钟是编译和第一步计算，所以 tps 只有 5。r2 读的是同一份文件，preprocess 62 秒，`forward_backward` 97 秒，tps 73。第 2 到第 10 步 tps：r1 平均约 347，r2 平均约 343。非数据并行规模是 CP×TP×PP=4，`32768 / (347 × 4)` 约 24 秒一步，和 r1 这 9 步的日志间隔一致。tflops 大约 0.2，mfu 0.06%。没有同配方的 4 卡，线性度算不出来。
+
+loss 停在 12.27 到 12.31，是因为词表宽度 202048，`ln(202048)` 约 12.216，第 1 步 12.31145 离它差约 0.095。前面几行词表是 2048，第 1 步 loss 在 7.7 附近。这条是随机初始化的 debug 模型，只训 LoRA，学习率 1e-4，10 步不会把交叉熵打下来。grad_norm 在 0.2656 到 0.3691，全程有限，没有变成 0。
 
 | 要点 | 结果 |
 | --- | --- |
-| assistant-only label masking | 没有日志 |
-| 真实 tokenizer | 没有加载发布版 MuseSparkTokenizer。前面几行用的是 `tests/assets/tokenizer/tokenizer.json`，词表 2048 |
-| renderer | 没有跑 |
-| LoRA | 没有跑 |
-| 全量激活重算 | 没有跑。debugmodel 默认是 `DefaultActivationRematConfig`，不是这条的 `FullActivationRematConfig` |
+| assistant-only label masking | ChatProcessor 使用 `MuseSparkRenderer`，`current_date=2026-10-02`。标签来自 renderer 的 `loss_mask`，非监督位置写成 `IGNORE_INDEX`。第一条样本打进了日志，文本里有 system、user、assistant，日期是 2026-10-02。没有打印有效 label 的个数 |
+| 真实 tokenizer | 加载了放到 `assets/hf/Muse-Spark-Open-816B-A42B/tokenizer.json` 的公开副本。id 到 201817。embedding 仍是 202048。不是测试用的 2048 词表 |
+| renderer | 第一条样本是 renderer 渲染结果，不是只拼用户原文 |
+| LoRA | 日志有 `LoRA training active with rank=8, alpha=16.0, target_modules=['output_gate', 'w13', 'w2', 'wo', 'wqkv']`。模型类名是 `FrozenMuseSparkModel`。AdamW 挂了 80 个参数张量。没有逐层量过哪些权重的梯度为 0 |
+| 全量激活重算 | 日志有三次 `Applied FullActivationRematConfig`，分别是 8、3、2 个 transformer blocks，save patterns 和 recompute patterns 都是 none |
 
-精度、性能、内存、确定性都没有样本。第 2 行的 CP 和多模态结果不能外推到 32K 和词表 202048。
+精度：没有 GPU 的 1000 步基线。性能：稳定段单卡 tps 约 347。内存：r1 第 1 步 4.43GiB，其后 4.32GiB；r2 第 1 步 4.24GiB，其后 4.30GiB。两次预留不一样。确定性：两次 loss、grad_norm 相同；tps 和 memory 不同。INFO 日志里没有 `Dropping sample`。
