@@ -188,11 +188,17 @@ def muse_spark_debugmodel_dist_moe_bf16(
     seq_len: int | None = None,
 ) -> Trainer.Config:
     """Configure the Muse debug model with BF16 Dist-MoE experts."""
-    return _with_dist_moe(
+    config = _with_dist_moe(
         muse_spark_debugmodel(seq_len),
         expert_precision="bf16",
         scratch_capacity_factor=2.0,
     )
+    # 910B has no CUDA graph capture. Keep the compile regions that already
+    # finish a step on this machine.
+    config.training.disable_cuda_graphs = True
+    config.model.local_compile_regions = ["loss", "fp32_to_bf16_split"]
+    config.comm.train_timeout_seconds = 1800
+    return config
 
 
 def muse_spark_debugmodel_dist_moe_mxfp8(

@@ -351,3 +351,37 @@ HCCL watchdog 把还在集合通信里的 rank 打成 SIGABRT（exit -6）。`Nu
 ## 15. 8 卡多模态 10 步
 
 上面几处都在的那次运行是 2026-10-28 的 `item2_logs/mm_r12.log`。10 步结束，日志有 `Training completed`。rank 0 的 loss 从 7.66202 到 4.68848，grad_norm 从 9.4633 到 3.0236，逐步数字在 `docs/npu_debugmodel_verification.md`。没有和参考 loss 对过。
+
+## 16. Dist-MoE bf16 在 910B 上的专家计算
+
+清单第 3 行的 `muse_spark_debugmodel_dist_moe_bf16` 原先过不了设备检查：
+
+```text
+ValueError: Dist-MoE requires an SM100-or-newer CUDA device
+```
+
+`torchtitan/models/common/dist_moe/runtime.py` 要求 `device.type == "cuda"` 且计算能力主版本至少 10。910B 的 `device.type` 是 `npu`。可选包 `dist_moe` 和 `torchao` 都没装，装上包也过不了这道检查。mxfp8 配方在配置期就会调用 `dist_moe.BlockScaledConfig()`，这次没有改，也没有跑。
+
+bf16 的改动都在 torchtitan 里，不改 site-packages。CUDA 设备仍走原来的包和 SM100 检查。
+
+`runtime.py` 在 NPU 上不再调用 `dist_moe.create_context`。换成 `_NpuDistMoeContext`，只实现 `select_activation_slot`、`reset`、`close`，并记下 `max_num_local_input_tokens`。流水线注册和关闭用的是这几个方法。专家的 scratch 不在这个对象里。
+
+`routed_experts.py` 在 `x_TD.device.type == "npu"` 时调用 `npu_dist_moe_forward`，包在保存区域 `feed_forward.routed_experts.dist_moe` 里（`recompute=False`）。`num_local_tokens_per_expert_E` 要传进去，不能先 `del`。
+
+`torchtitan/models/common/dist_moe/npu.py` 做三件事：
+
+- 专家 GEMM 用 `npu_grouped_matmul`。权重在模块里是 `[E, out, in]`，调用前转成 `[E, in, out]`。`group_list` 是 int64 前缀和，`split_item=3`、`group_type=0`、`group_list_type=0`。直接传 `[E, out, in]` 会在 `aclnnGroupedMatmulV5` 报 161002。非方阵对照（F=8，2F=16）和 `rows @ W.T` 的最大绝对差是 0.0304，是 bf16 误差。FSDP 权重先 `to_local()`。
+- 激活是普通 SwiGLU 时用 `npu_swiglu`，按最后一维对半，前一半 gate、后一半 up。ClampedSwiGLU 仍走 Python 公式。debug 模型用的是普通 SwiGLU。
+- token 交换用现成的 `AllToAllTokenDispatcher._dispatch` / `_combine`，不是 `npu_moe_distribute_dispatch`。dispatcher 用 `object.__setattr__` 挂在模块上，不进子模块，避免改 CUDA 那条的 state dict 和 FSDP 树。分数仍在 combine 里做加权 scatter-add。
+
+第一次 4 卡启动（`/workspace/dist_moe_bf16_r1.log`）没有 step，报：
+
+```text
+RuntimeError: remat.region 'dispatch' was called with recompute=True while nested inside a recompute=False (SAVE) region.
+```
+
+公共 `dispatch()` / `combine()` 会再开默认重算的 `dispatch`、`combine` 区域。外层 `dist_moe` 是保存区域，里面不能再套重算区域。NPU 路径改成直接调 `_dispatch` / `_combine`，元数据在这一层组装，不再开内层区域。
+
+`muse_spark_debugmodel_dist_moe_bf16` 在 `_with_dist_moe` 之后把 `disable_cuda_graphs` 设回 True。910B 没有 CUDA graph。`local_compile_regions` 收回 `loss`、`fp32_to_bf16_split`，`train_timeout_seconds=1800`。网格仍是基类的 4 卡 `dp_shard=2, tp=2, ep=2`。
+
+2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=4`，同一配置连跑两次（`/workspace/dist_moe_bf16_r2.log`、`r3.log`）。10 步 loss、grad_norm 逐项相同，loss 从 7.68369 到 5.36020，grad_norm 从 2.7578 到 1.6899。两趟都有 `Training completed` 和 `Process group destroyed`。逐步数字在 `docs/npu_debugmodel_verification.md` 第 3 行。没有 GPU 1000 步基线。mxfp8 和压缩 MoE 没有样本。

@@ -37,6 +37,7 @@ GPU 机器上的环境、四项缺数和取数步骤写在 `docs/gpu_baseline_se
 | 第 2 行② `muse_spark_debugmodel_fsdp2_cp2_ep4` | 4 卡 `dp_shard=2, cp=2, tp=1, ep=4` | `det_fsdp2_r04_r1/r2.log` | 10 步 loss、grad_norm 相同，并与旧日志 `item2_logs/det_fsdp2_r1.log` 相同 |
 | 第 2 行③ `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4` | 8 卡 `dp_shard=2, cp=2, tp=2, ep=4` | `det_mm_r04_r1/r2.log` | 10 步 loss、grad_norm 相同。旧多模态日志没有设 seed，不逐项比 |
 
+第 3 行 bf16 的两次对照在 2026-10-30，见下文第 3 行。mxfp8 没有样本。
 
 ### 第 1 行
 
@@ -408,17 +409,40 @@ NGPU=8 MODULE=tests.integration_tests.models \
 | 项 | 内容 |
 | --- | --- |
 | 工作项 | 适配 dispatch、expert compute、combine 的融合执行，支持 bf16 与 mxfp8，验证与压缩 MoE 的兼容 |
-| 配方 | `muse_spark_debugmodel_dist_moe_bf16`、`muse_spark_debugmodel_dist_moe_mxfp8`（`muse_spark.py` 约 164、175 行） |
-| 清单并行 | 4 卡（沿用基类 TP2 × EP2），另开 CUDA graphs |
-| 备注 | 上游为 Blackwell 依赖（sm100+），且需额外安装 dist_moe 包。NPU 上需评估替代方案 |
-| 结果 | 没跑 |
+| 配方 | `muse_spark_debugmodel_dist_moe_bf16`、`muse_spark_debugmodel_dist_moe_mxfp8`（`muse_spark.py` 187、204 行） |
+| 清单并行 | 4 卡（沿用基类 TP2 × EP2）。910B 没有 CUDA graph，这条 bf16 配方把 `disable_cuda_graphs` 设回 True |
+| 备注 | 上游 `dist_moe` 是 SM100 CuTe 包，`device.type == "npu"` 过不了设备检查，包本身也没装。bf16 在本机用 NPU 分组矩阵乘和现有 all-to-all |
+| 结果 | bf16 跑通，两次 loss、grad_norm 相同。mxfp8 和压缩 MoE 没跑 |
 
-| 要点 | 结果 |
-| --- | --- |
-| 融合执行的数值正确性 | 没有数。当前环境 `import dist_moe` 失败，`torchao` 也不在 |
-| 与压缩 MoE 的兼容性 | 没有跑到专家计算。910B 上这两条配方没有替代实现可跑 |
+NPU 路径在工作区，还没提交。干净检出跑不了这条。
 
-精度、性能、内存、确定性都没有样本。提交 `986e693c` 只是导入失败时跳过，避免别的配方被这条依赖拖死，不是这条本身跑通了。
+- `torchtitan/models/common/dist_moe/npu.py`：专家计算用 `npu_grouped_matmul`。权重从 `[E, out, in]` 转成 `[E, in, out]`，`group_list` 是 int64 前缀和，`split_item=3`、`group_type=0`、`group_list_type=0`。激活用 `npu_swiglu`（最后一维对半，先 gate 后 up）。
+- token 交换仍是仓库里的 `AllToAllTokenDispatcher._dispatch` / `_combine`，不是 `npu_moe_distribute_dispatch`。公共 `dispatch()` / `combine()` 会再开默认重算的 `dispatch`、`combine` 区域。外层 `dist_moe` 是保存区域，里面不能再套重算区域。`/workspace/dist_moe_bf16_r1.log` 就是这个报错，没有 step。
+- `runtime.py` 在 NPU 上跳过 SM100 检查，上下文只提供 `select_activation_slot`、`reset`、`close`，不导入 `dist_moe`。`routed_experts.py` 在 `x_TD.device.type == "npu"` 时走上面这条，CUDA 仍走原来的包。
+- bf16 配方在 `_with_dist_moe` 之后把 `local_compile_regions` 收回到 `loss`、`fp32_to_bf16_split`，`train_timeout_seconds=1800`。
+
+环境与第 1 行相同：`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`，`NGPU=4`，模块 `torchtitan_recipes.tests.models.muse_spark`，配置 `muse_spark_debugmodel_dist_moe_bf16`。启动前 8 张卡都空着，没有设 `ASCEND_RT_VISIBLE_DEVICES`。日志 `/workspace/dist_moe_bf16_r2.log`（2026-10-30 07:28:46–07:28:56 UTC）和 `r3.log`（07:29:57–07:30:07 UTC）。两趟都有 `Training completed` 和 `Process group destroyed`。
+
+| step | loss | grad_norm | r2 memory | r2 tps | r3 memory | r3 tps |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 7.68369 | 2.7578 | 0.08GiB (0.27%) | 18 | 0.08GiB (0.27%) | 19 |
+| 2 | 7.33404 | 2.4114 | 0.09GiB (0.30%) | 340 | 0.09GiB (0.30%) | 358 |
+| 3 | 6.72993 | 2.3099 | 0.09GiB (0.30%) | 353 | 0.09GiB (0.30%) | 366 |
+| 4 | 6.28970 | 2.0730 | 0.09GiB (0.30%) | 360 | 0.09GiB (0.30%) | 359 |
+| 5 | 6.52310 | 1.7148 | 0.09GiB (0.30%) | 359 | 0.09GiB (0.30%) | 361 |
+| 6 | 5.89579 | 1.7746 | 0.09GiB (0.30%) | 356 | 0.09GiB (0.30%) | 358 |
+| 7 | 5.67449 | 1.7391 | 0.09GiB (0.30%) | 354 | 0.09GiB (0.30%) | 353 |
+| 8 | 5.88493 | 1.6401 | 0.09GiB (0.30%) | 357 | 0.09GiB (0.30%) | 356 |
+| 9 | 5.41881 | 1.7725 | 0.09GiB (0.30%) | 361 | 0.09GiB (0.30%) | 359 |
+| 10 | 5.36020 | 1.6899 | 0.09GiB (0.30%) | 359 | 0.09GiB (0.30%) | 374 |
+
+第 2 到第 10 步 tps：r2 平均 355，r3 平均 360。非数据并行规模是 TP×CP×PP=2，`512 / (355 × 2)` 约 0.72 秒一步，和日志间隔一致。tflops 0.01，mfu 0.00%。
+
+和第 1 行是同一网格、同一 seed。第 1 步 loss 7.68369，第 1 行是 7.68353。专家计算、重算保存区不同，padding 行也按现有 dispatcher 参与计算，不要求逐位相同。grad_norm 从 2.7578 到 1.6899，全程有限，没有变成 0。
+
+精度：没有 GPU 的 1000 步基线。第 1 步离 `ln(2048)` 差 0.059。性能：稳定段单卡 tps 约 355，没有同配方 8 卡，线性度算不出来。内存：第 1 步 0.08GiB，其后 0.09GiB，是这一步窗口里的最大预留，占日志容量 0.30%。确定性：两次 loss、grad_norm 相同；tps 不同。
+
+mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期就会调用 `dist_moe.BlockScaledConfig()`，包不在就建不起配置。`torchao` 也不在。`npu_grouped_matmul_swiglu_quant` 是 INT8，不是 MXFP8。压缩 MoE 的兼容性没有做到可跑的对照。
 
 ---
 
