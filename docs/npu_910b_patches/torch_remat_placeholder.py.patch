@@ -1,0 +1,43 @@
+--- a/torch_remat/_placeholder.py	2026-10-30 09:07:33.543804660 +0000
++++ b/torch_remat/_placeholder.py	2026-10-30 09:07:15.275804660 +0000
+@@ -86,17 +86,29 @@
+ 
+     device = metadata.device
+ 
+-    # Rebind an empty tensor onto the null storage in one ``set_``: the bounds check
+-    # compares (shape, stride) against the storage's *declared* extent (the real
+-    # output's size, captured in forward), so the layout is accepted without ever
+-    # allocating -- zero peak memory on any device, no temporary.
+-    placeholder = torch.empty(0, dtype=metadata.dtype, device=device)
+-    placeholder.set_(
+-        _null_storage(metadata.storage_nbytes, device),
+-        0,
+-        torch.Size(metadata.shape),
+-        tuple(metadata.stride),
+-    )
++    # CANN's caching allocator pads every NPU allocation to 32 bytes and
++    # dereferences the storage pointer while doing it. A null data pointer
++    # survives that on CPU/CUDA and segfaults on 910B once the skipped
++    # output is large enough to hit the pad path during recompute.
++    if device.type == "npu":
++        placeholder = torch.empty_strided(
++            torch.Size(metadata.shape),
++            tuple(metadata.stride),
++            dtype=metadata.dtype,
++            device=device,
++        )
++    else:
++        # Rebind an empty tensor onto the null storage in one ``set_``: the bounds check
++        # compares (shape, stride) against the storage's *declared* extent (the real
++        # output's size, captured in forward), so the layout is accepted without ever
++        # allocating -- zero peak memory on any device, no temporary.
++        placeholder = torch.empty(0, dtype=metadata.dtype, device=device)
++        placeholder.set_(
++            _null_storage(metadata.storage_nbytes, device),
++            0,
++            torch.Size(metadata.shape),
++            tuple(metadata.stride),
++        )
+ 
+     torch._C._set_storage_data_ptr_access_error_msg(
+         placeholder.untyped_storage()._cdata, message

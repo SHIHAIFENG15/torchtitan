@@ -2,6 +2,17 @@
 
 记录 `muse_spark_debugmodel` 在容器 `npu-y00839695-torchtitan-20261027` 里启动失败的原因，以及已经做的修复。
 
+## 可复用补丁（请先看这里）
+
+910B4 上 flex / remat 的 **site-packages 改动不在 Titan 业务代码里**，已打成可复用补丁包：
+
+- 目录：`docs/npu_910b_patches/`
+- 应用：`bash docs/npu_910b_patches/apply_npu_910b_patches.sh`
+- 环境变量：`source docs/npu_910b_patches/env_npu_910b.sh`
+- 说明与版本钉扎：`docs/npu_910b_patches/README.md`
+
+换机器时：检出带这些文件的分支 → 装同版本 `torch_npu` / `torch_remat` → 跑 apply 脚本 → source env → 再跑训练。下面各节是问题背景与手工改法记录；新环境优先用补丁包，不要只靠本机已改过的 venv。
+
 环境：
 
 - `torch==2.15.0+cpu`
