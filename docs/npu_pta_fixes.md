@@ -281,3 +281,8 @@ debug 配方在 `_use_released_tokenizer_with_debug_model` 之后同样读 `MUSE
 - `muse_spark_debugmodel_mem_1device`：全部并行度为 1，关掉 sequence parallel，`steps=20`
 
 跑法、记数表和达标判定写在 `docs/gpu_baseline_perf_mem.md`。NPU 与 GPU 必须用同一 CONFIG。跑完后把数填进 `docs/npu_debugmodel_verification.md` 第 1 行和 `docs/npu_gpu_acceptance_report.md`。
+
+2026-10-31 NPU 实测：`mem_1device`、`perf_dp2`、`perf_dp4` 均跑通（见 `docs/gpu_baseline_perf_mem.md` 实测表）。
+`perf_*` 需 `init_timeout_seconds=train_timeout_seconds=1800`，否则 8 卡首步 flex 编译会触发 HCCL watchdog。
+性能跑建议开 `MUSE_DEBUG_DETERMINISTIC=1`；未开时 4 卡曾在首步报非有限梯度。
+GPU 同配方尚未跑，性能/内存仍不能做达标判定。

@@ -170,6 +170,8 @@ def muse_spark_debugmodel_perf_dp2(
     """
     config = muse_spark_debugmodel(seq_len)
     config.training.steps = 200
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
     return config
 
 
@@ -191,6 +193,8 @@ def muse_spark_debugmodel_perf_dp4(
         ),
     )
     config.training.steps = 200
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
     return config
 
 

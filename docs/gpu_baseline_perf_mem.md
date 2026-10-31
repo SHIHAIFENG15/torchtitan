@@ -106,3 +106,25 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 ## 尚未覆盖
 
 第 2① `with_cp` 的 4↔8 与单卡（单卡须非 CP 内核）、第 4/5 行的 4 卡减半变体，等第 1 行这套跑通后再复制。
+
+
+## NPU 实测结果（2026-10-31，`e8bd720c`+超时补丁，容器 `npu-y00839695-torchtitan-20261028`）
+
+环境：`ENTRYPOINT=torchtitan_ascend.train`，`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`，`TORCHINDUCTOR_COMPILE_THREADS=1`，`TORCHNPU_PRECOMPILE_THREADS=1`。`perf_*` 配方另设 `init_timeout_seconds=train_timeout_seconds=1800`（8 卡首步 flex 编译会超过默认 300s watchdog）。
+
+| 端 | 4 卡稳定 tps (step>100) | 8 卡稳定 tps (step>100) | 线性度 | 与对端差（百分点） | 结论 |
+| --- | --- | --- | --- | --- | --- |
+| NPU | 322.89 | 307.98 | 0.9538 | 待 GPU 同配方跑完 | 仅有 NPU 数，**不能判达标** |
+| GPU | | | | | 未跑 |
+
+| 端 | 单卡稳定 memory (GiB) | 4 卡稳定 memory (GiB) | 结论 |
+| --- | --- | --- | --- |
+| NPU | 0.26（step2–20；step1 为 0.33 含编译） | 0.11 | 单卡档已有 NPU 数；缺 GPU 对照，**不能判达标** |
+| GPU | | | 未跑 |
+
+日志：
+- `logs/mem_1device_npu.log`（成功）
+- `logs/perf_dp2_npu_r2.log`（成功；首轮未开 `MUSE_DEBUG_DETERMINISTIC` 时首步非有限梯度失败）
+- `logs/perf_dp4_npu_r3.log`（成功；此前两轮 8 卡在首步 HCCL/watchdog 失败，加长 init/train timeout 后通过）
+
+GPU 请用同一三个 CONFIG 按上文命令跑完，填表后再算百分点差。

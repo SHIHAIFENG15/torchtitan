@@ -199,3 +199,12 @@
 ## 性能与内存对照怎么补齐
 
 第 1 行已增加 `perf_dp2` / `perf_dp4` / `mem_1device` 配方。跑法与记数表见 `docs/gpu_baseline_perf_mem.md`。未跑完前，总表里性能、内存保持不达标。
+
+### 第 1 行 NPU 性能/内存实测摘要
+
+- 4 卡稳定 tps：322.89
+- 8 卡稳定 tps：307.98
+- NPU 线性度：0.9538
+- 单卡稳定 memory：0.26GiB
+- 4 卡稳定 memory：0.11GiB
+- GPU 同配方未跑，两项仍不达标。
