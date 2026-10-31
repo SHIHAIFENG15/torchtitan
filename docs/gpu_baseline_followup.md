@@ -1,5 +1,7 @@
 # GPU 基线还要补的部分
 
+> 2026-10-31 更新：GPU 侧 followup 已完成，结果在 `docs/gpu_debugmodel_baseline.md` 附录与 `docs/gpu_baseline/*.txt`。NPU 对齐结论见 `docs/npu_gpu_acceptance_report.md`。下文保留作历史跑法；缺的是把 step 0 权重拷到 NPU 再算 MAE。
+
 对照 `docs/npu_debugmodel_verification.md` 里已经记下来的 NPU 数，和 2026-10-30 在 `node-5-15`（8×A100-80GB，容器 `gpu-z00824525-tt`）上的 `docs/gpu_debugmodel_baseline.md`。GPU 那次检出是 `bdab0793`。本文写两件事：1000 步为什么写不出 step 0，以及还没跑的 GPU 命令。
 
 这台 Mac 到不了 `node-5-15`。下面的命令要在 GPU 容器里执行。不要在 NPU 上跑。

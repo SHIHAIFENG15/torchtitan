@@ -18,6 +18,8 @@
 
 有 GPU 结果的行，达标与否写在该行的精度、性能、内存、确定性里，不另附逐项对照表。
 
+完整四项对齐结论见 `docs/npu_gpu_acceptance_report.md`（含第 4、5 行 GPU 补跑与六份 1000 步导出）。
+
 GPU 机器上的环境、四项缺数和取数步骤写在 `docs/gpu_baseline_setup.md`。NPU 上的表不要改成 GPU 的数。
 
 ---
@@ -108,7 +110,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 第 1、2、5、8 步 tps 掉到个位数，对应 flex attention 编译。第 6 步前有一条 `Sample length 633 > training max_context_length=512`，该样本被跳过。r1 稳定步 memory 0.26GiB；r2 稳定步 0.12GiB。loss 和 grad_norm 不受这个差别影响。
 
-精度。不达标。1000 步停在 GPU 写 step 0。这组 GPU 10 步不能填进第 4 行。
+精度。不达标。GPU 1000 步已导出（`docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`），step 0 未上 NPU，MAE 未算。这组 GPU 数不能填进第 4 行。
 
 性能。不达标。没有同配方 4 卡，也没有满 100 步。第 5、8 步 tps 掉下去是视觉长度重编译，GPU 同样掉到 15，不能当成线性度。
 
@@ -227,7 +229,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 ### 本行验收指标
 
-精度。不达标。要同一份 step 0 权重，两边各跑不少于 1000 步，MoE 平均绝对误差不超过 0.02 或平均相对误差不超过 2%。GPU 的 1000 步已经导出，NPU 还没加载，MAE 没算。两边各自初始化的 10 步不是这项。
+精度。不达标。要同一份 step 0 权重，两边各跑不少于 1000 步，MoE 平均绝对误差不超过 0.02 或平均相对误差不超过 2%。GPU 1000 步在 `docs/gpu_baseline/debugmodel_1000.txt`；step 0 仍在 GPU 机，NPU 未加载，MAE 没算。10 步各自初始化不是这项。对齐总表见 `docs/npu_gpu_acceptance_report.md`。
 
 性能。不达标。要丢掉前 100 步，比同一配方的 8 卡 tps / 4 卡 tps 和 GPU 的同一比值，差距不超过 2 个百分点。这条世界大小固定是 4，没有 8 卡，也没有满 100 步。GPU 也没测线性度。10 步 tps 不能拿来算。
 
@@ -276,7 +278,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 上面是改网格之前的状态。清单上的 4 卡确定性结果如下。无 TP 的对照只说明 Ulysses 在 `tp=1` 时梯度有限，不能代替这条。
 
-精度。不达标。1000 步共享权重没有。GPU 写 step 0 时 CP 内核和 `cp=1` 冲突，见 `docs/gpu_baseline_followup.md`。
+精度。不达标。GPU 1000 步已导出（`docs/gpu_baseline/with_cp_1000.txt`），step 0 未上 NPU，MAE 未算。
 
 性能。不达标。没有同一配方的 8 卡，也没有满 100 步。稳定段大约 130 到 145 tps，不能算线性度。
 
@@ -306,7 +308,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 第 2 到第 10 步 tps：r1 平均 123，r2 平均 119。非数据并行规模是 CP×TP×PP=2，`512 / (123 × 2)` 约 2.1 秒一步，和日志时间间隔一致。第 1 步 loss 7.73262，离 `ln(2048)` 差 0.108。tflops 0.00，mfu 0.00%。比第 1 行慢，是因为 CP=2、TP=1，和第 1 行的 TP=2、CP=1 不是同一网格。
 
-精度。不达标。1000 步共享权重没有，GPU 写 step 0 失败，见 `docs/gpu_baseline_followup.md`。
+精度。不达标。GPU 1000 步已导出（`docs/gpu_baseline/fsdp2_cp2_ep4_1000.txt`），step 0 未上 NPU，MAE 未算。
 
 性能。不达标。稳定段约 123 tps。没有同一配方的 8 卡，也没有满 100 步。GPU 没测线性度。
 
@@ -518,13 +520,13 @@ mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 | dummy 输入零值依赖 | 没有单独构造「无媒体」batch，也没有核对 dummy 是否为 0 |
 | bank indices 与 token 分片对齐 | 没有打印 bank index 和 token 分片。10 步 loss 有限只说明没有在这里崩溃 |
 
-精度。不达标。GPU 还没跑这条 EP2、Ulysses 配方，不能用第 2 行③的 GPU 结果。跑法在 `docs/gpu_baseline_followup.md`。第 1 步离 `ln(2048)` 差 0.067，只说明 NPU 尺度。
+精度。不达标。GPU 10 步与 1000 步已齐（`docs/gpu_baseline/debugmodel_mm_1000.txt`）。step 0 还在 GPU 机，NPU 未加载，MAE 未算。10 步 loss 差约 −0.09 到 +0.11，不是 MAE。详见 `docs/npu_gpu_acceptance_report.md`。
 
-性能。不达标。r1 稳定段约 120 tps。没有同配方 4 卡，也没有满 100 步。
+性能。不达标。r1 稳定段约 120 tps，GPU 约 82–90。没有同配方 4 卡，也没有满 100 步。
 
-内存。不达标。没有这条的 GPU 预留，单卡没跑。NPU 稳定预留 0.12GiB。
+内存。不达标。单卡没跑。NPU 稳定预留 0.12GiB，GPU 约 0.10GiB，同量级不够单卡对照。
 
-确定性。NPU 两次达标。没有 GPU 两次，交叉对照不达标。
+确定性。NPU 两次达标，和 GPU 对齐不达标。两边各自两次相同；跨设备从第 1 步不同，差不发散。
 
 ---
 
@@ -569,10 +571,10 @@ loss 停在 12.27 到 12.31，是因为词表宽度 202048，`ln(202048)` 约 12
 | LoRA | 日志有 `LoRA training active with rank=8, alpha=16.0, target_modules=['output_gate', 'w13', 'w2', 'wo', 'wqkv']`。模型类名是 `FrozenMuseSparkModel`。AdamW 挂了 80 个参数张量。没有逐层量过哪些权重的梯度为 0 |
 | 全量激活重算 | 日志有三次 `Applied FullActivationRematConfig`，分别是 8、3、2 个 transformer blocks，save patterns 和 recompute patterns 都是 none |
 
-精度。不达标。GPU 还没跑，见 `docs/gpu_baseline_followup.md`。NPU 第 1 步离 `ln(202048)` 约 0.095，只说明随机初始化的尺度，不是 MAE。
+精度。不达标。GPU 10 步与 1000 步已齐（`docs/gpu_baseline/ultradata_lora_1000.txt`）。step 0 未上 NPU，MAE 未算。10 步跨设备 |loss diff|≤0.027，不是 MAE。详见 `docs/npu_gpu_acceptance_report.md`。
 
-性能。不达标。稳定段约 347 tps。没有另一档卡数，也没有满 100 步。
+性能。不达标。稳定段 NPU 约 347 tps。没有另一档卡数，也没有满 100 步线性度。
 
-内存。不达标。没有 GPU 预留。NPU 两次稳定预留大约 4.3GiB，彼此也不相同。
+内存。不达标。单卡没跑。NPU 稳定预留约 4.3GiB，GPU 日志约 3.46GiB。
 
-确定性。NPU 两次的 loss、grad_norm 达标。没有 GPU 对照，交叉对照不达标。INFO 日志里没有 `Dropping sample`。
+确定性。NPU 两次达标，和 GPU 对齐不达标。两边各自两次相同；跨设备差是各行里最小的，仍非逐项一致。INFO 日志里没有 `Dropping sample`。
