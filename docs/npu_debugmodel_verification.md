@@ -231,9 +231,9 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 精度。不达标。要同一份 step 0 权重，两边各跑不少于 1000 步，MoE 平均绝对误差不超过 0.02 或平均相对误差不超过 2%。GPU 1000 步在 `docs/gpu_baseline/debugmodel_1000.txt`；step 0 仍在 GPU 机，NPU 未加载，MAE 没算。10 步各自初始化不是这项。对齐总表见 `docs/npu_gpu_acceptance_report.md`。
 
-性能。不达标（NPU 对照已跑，缺 GPU）。NPU `perf_dp2` 稳定段平均 tps 322.89，`perf_dp4` 307.98，线性度 0.9538。GPU 同配方未跑，算不出与 GPU 的百分点差。详见 `docs/gpu_baseline_perf_mem.md`。
+性能。不达标（NPU、GPU 同配方对照已闭环）。NPU `perf_dp2` 稳定段平均 tps 322.89，`perf_dp4` 307.98，线性度 0.9538。GPU 同配方：`perf_dp2` 1003.27，`perf_dp4` 924.81，线性度 0.9218。与 NPU 差 |0.9538 − 0.9218| × 100 = 3.20 个百分点，超过 2 个百分点阈值，判定不达标。GPU 8 卡首轮日志疑似外部争卡退化已作废，采用重跑 `perf_dp4_gpu_r2.log`。命令、HEAD、日期与详表见 `docs/gpu_baseline_perf_mem.md` GPU 实测节。
 
-内存。不达标（NPU 单卡已跑，缺 GPU）。NPU `mem_1device` 稳定预留 0.26GiB；4 卡稳定预留 0.11GiB。GPU 单卡未跑。详见 `docs/gpu_baseline_perf_mem.md`。
+内存。达标（NPU、GPU 单卡与 4 卡对照已闭环）。NPU `mem_1device` 稳定预留 0.26GiB；4 卡稳定预留 0.11GiB。GPU 单卡 0.24GiB（step2–20）；4 卡 0.11GiB（`perf_dp2` step>100）。单卡差 0.02GiB，4 卡持平，判定达标。原始日志 `logs/mem_1device_gpu.log`、`logs/perf_dp2_gpu.log`。
 
 确定性。NPU 自己两次达标，和 GPU 对齐不达标。两边各自两次的 loss、grad_norm 都相同。两边互相比从第 1 步就不同，loss 差大约 0.07 到 0.13，没有随步数放大。标准要求同策略结果一致，所以这项不达标。
 

@@ -17,7 +17,7 @@
 
 | 清单行 | 配方 | 精度 | 性能 | 内存 | 确定性（NPU自洽 / 对GPU） |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `muse_spark_debugmodel` 4卡 | 不达标 | 不达标 | 不达标 | 达标 / 不达标 |
+| 1 | `muse_spark_debugmodel` 4卡 | 不达标 | 不达标（3.2pp） | 达标 | 达标 / 不达标 |
 | 2① | `with_cp` 4卡 | 不达标 | 不达标 | 不达标 | 达标 / 不达标 |
 | 2② | `fsdp2_cp2_ep4` 4卡 | 不达标 | 不达标 | 不达标 | 达标 / 不达标 |
 | 2③ | `mm_fsdp2_tp2_cp2_ep4` 8卡 | 不达标 | 不达标 | 不达标 | 达标 / 不达标 |
@@ -44,13 +44,15 @@
 - step 0 在 GPU：`outputs/checkpoint-debugmodel/step-0`（报告路径）。NPU 未加载，MAE 未算。
 - 10 步各自初始化：loss GPU−NPU 约 +0.07～+0.13，不是 MAE。
 
-### 性能 — 不达标
+### 性能 — 不达标（已测，差 3.2 个百分点）
 
-- 世界大小固定 4，无同配方 8 卡。稳定段 NPU 约 300+ tps（墙钟不稳时更低），GPU 约 185–206 tps。不能算线性度。
+- 同配方 4↔8 卡线性度已用 `perf_dp2` / `perf_dp4` 补测（2026-10-31）：NPU 0.9538，GPU 0.9218，差 3.20 个百分点 > 2 阈值。
+- GPU 4 卡稳定 tps 1003.27，8 卡稳定 tps 924.81（step>100 各 100 步平均）；原始日志 `logs/perf_dp2_gpu.log`、`logs/perf_dp4_gpu_r2.log`（首轮 `perf_dp4_gpu.log` 疑似争卡作废）。
 
-### 内存 — 不达标
+### 内存 — 达标
 
-- 单卡未跑。4 卡稳定预留两边都是 **0.11GiB**（日志窗口最大预留）。
+- 单卡同场景已测：GPU 0.24GiB（step2–20）vs NPU 0.26GiB，同量级。
+- 4 卡 FSDP2 稳定预留两边都是 **0.11GiB**（日志窗口最大预留）。
 
 ### 确定性 — NPU 达标，对 GPU 不达标
 
@@ -186,15 +188,15 @@
 | --- | --- |
 | GPU 10 步 ×2（行 1、2①②③、4、5） | 已齐，见 `docs/gpu_debugmodel_baseline.md` |
 | GPU 1000 步导出（同上六份） | 已齐，见 `docs/gpu_baseline/*.txt` |
-| GPU step 0 权重 | 在 GPU 机 `outputs/checkpoint-*/step-0/`，**未进 git / 未到 NPU** |
-| NPU 加载 step 0 后的 1000 步 + MAE | **未做**（缺权重） |
-| 性能线性度（同配方 4↔8） | **未做**（配方不支持） |
-| 单卡内存对照 | **未做** |
+| GPU step 0 权重 | 已进 git：`outputs/checkpoint-<配置名>/`（ultradata 为 90MB 分卷 + 拼接说明），NPU 拉取后即可加载 |
+| NPU 加载 step 0 后的 1000 步 + MAE | **未做**（权重已具备，待 NPU 执行） |
+| 性能线性度（同配方 4↔8） | 第 1 行已测：GPU 0.9218 vs NPU 0.9538，差 3.2pp，**不达标** |
+| 单卡内存对照 | 第 1 行已测：GPU 0.24 vs NPU 0.26，**达标** |
 | Dist-MoE / mxfp8 GPU | **不可做**（SM100） |
 
-下一步（阻塞精度达标）：把六份 step 0 从 GPU 拷到 NPU，用 `scripts/loss_compare.py` 的 load 路径（或 `TORCHTITAN_CHECKPOINT_INITIAL_LOAD_PATH`）跑 NPU 1000 步，再对 `docs/gpu_baseline/*.txt` 算 MAE / 相对误差。
+下一步（阻塞精度达标）：从 git 拉取六份 step 0（`outputs/checkpoint-<配置名>/`，ultradata 先 `cat __0_0.distcp.part-* > __0_0.distcp`），用 `scripts/loss_compare.py` 的 load 路径（或 `TORCHTITAN_CHECKPOINT_INITIAL_LOAD_PATH`）跑 NPU 1000 步，再对 `docs/gpu_baseline/*.txt` 算 MAE / 相对误差。
 
-报告依据提交：`7ed23db6`（GPU 基线）及当前 NPU 验收文档。未编造 GPU 数。
+报告依据提交：`7ed23db6`（GPU 基线）、`524ff3e7`（权重入库）及当前 NPU 验收文档。未编造 GPU 数。
 
 ## 性能与内存对照怎么补齐
 
@@ -212,3 +214,12 @@
 ## GPU 待跑
 
 性能/内存要闭环，GPU 必须跑的命令与交数表见 `docs/gpu_todo_runs.md`。
+
+## 第 1 行 GPU 性能/内存实测结果（2026-10-31 闭环）
+
+- 4 卡稳定 tps：1003.27（`perf_dp2`，step>100 均值）
+- 8 卡稳定 tps：924.81（`perf_dp4` r2，step>100 均值；首轮 r1 疑似外部争卡退化作废）
+- GPU 线性度：0.9218；与 NPU 0.9538 差 **3.20 个百分点 > 2**，性能项**不达标**
+- 单卡稳定 memory：0.24GiB（NPU 0.26）；4 卡 0.11GiB（NPU 0.11），内存项**达标**
+- 依据：HEAD `7ed23db6` + perf/mem 配方，日志 `logs/mem_1device_gpu.log`、`logs/perf_dp2_gpu.log`、`logs/perf_dp4_gpu_r2.log`；详表见 `docs/gpu_baseline_perf_mem.md` GPU 实测节
+- `docs/gpu_todo_runs.md` 三组任务已全部执行完毕，无遗留 GPU 侧动作（第 2①/4/5 行的 perf·mem 变体按文档属后续复制项）

@@ -117,13 +117,13 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 
 | 端 | 4 卡稳定 tps (step>100) | 8 卡稳定 tps (step>100) | 线性度 | 与对端差（百分点） | 结论 |
 | --- | --- | --- | --- | --- | --- |
-| NPU | 322.89 | 307.98 | 0.9538 | 待 GPU 同配方跑完 | 仅有 NPU 数，**不能判达标** |
-| GPU | | | | | 未跑 |
+| NPU | 322.89 | 307.98 | 0.9538 | 3.20 | 已对齐，判定见 GPU 行 |
+| GPU | 1003.27 | 924.81 | 0.9218 | 3.20 | **不达标**（差 3.20 个百分点 > 2 阈值） |
 
 | 端 | 单卡稳定 memory (GiB) | 4 卡稳定 memory (GiB) | 结论 |
 | --- | --- | --- | --- |
-| NPU | 0.26（step2–20；step1 为 0.33 含编译） | 0.11 | 单卡档已有 NPU 数；缺 GPU 对照，**不能判达标** |
-| GPU | | | 未跑 |
+| NPU | 0.26（step2–20；step1 为 0.33 含编译） | 0.11 | 已对齐，判定见 GPU 行 |
+| GPU | 0.24（step2–20） | 0.11（perf_dp2 step>100） | **达标**（单卡差 0.02GiB，4 卡持平） |
 
 日志：
 - `logs/mem_1device_npu.log`（成功）
@@ -131,3 +131,24 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 - `logs/perf_dp4_npu_r3.log`（成功；此前两轮 8 卡在首步 HCCL/watchdog 失败，加长 init/train timeout 后通过）
 
 GPU 请用同一三个 CONFIG 按上文命令跑完，填表后再算百分点差。
+
+## GPU 实测结果（2026-10-31，HEAD `7ed23db6` 基线 + perf/mem 配方，容器 `gpu-z00824525-tt`）
+
+环境：`CUBLAS_WORKSPACE_CONFIG=:4096:8`，`TORCH_DEVICE_BACKEND_AUTOLOAD=1`，`MUSE_DEBUG_DETERMINISTIC=1`（与 NPU 侧一致）。配方未改网格，未改超时（GPU 无 HCCL watchdog 问题）。
+
+| 项 | 结果 |
+| --- | --- |
+| 单卡内存 | 稳定 0.24GiB（step2–20 全部 0.24；NPU 0.26） |
+| 4 卡稳定 tps | 1003.27（step 101–200 共 100 步算术平均；前后半段 993.8 / 1012.8，平稳） |
+| 8 卡稳定 tps | 924.81（step 101–200 共 100 步算术平均；趋势平稳 898–975） |
+| 线性度 | 924.81 / 1003.27 = **0.9218** |
+| 与 NPU 差 | \|0.9538 − 0.9218\| × 100 = **3.20 个百分点** |
+| 判定 | 性能线性度**不达标**（> 2）；单卡/4 卡内存**达标** |
+
+日志：
+- `logs/mem_1device_gpu.log`（成功，20 步）
+- `logs/perf_dp2_gpu.log`（成功，200 步）
+- `logs/perf_dp4_gpu.log`（成功但**作废**：tps 随时间从 ~420 退化到 ~300，疑似与外部任务争卡，已用重跑取代）
+- `logs/perf_dp4_gpu_r2.log`（成功，采用其数据；运行期间监控确认无外部任务）
+
+说明：A100 (NVLink) 上 8 卡相对 4 卡的吞吐比 0.92，低于 NPU 的 0.95；差值 3.2 个百分点超出 2 个百分点阈值，按协议如实记为不达标。若需复测，建议在独占时段重跑 `perf_dp4`。
