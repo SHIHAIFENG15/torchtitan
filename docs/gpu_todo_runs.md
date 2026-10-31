@@ -84,3 +84,7 @@ NGPU=8 MODULE=torchtitan_recipes.tests.models.muse_spark \
 - 跑法细节：`docs/gpu_baseline_perf_mem.md`
 - NPU 实测与失败踩坑：同文件「NPU 实测结果」一节
 - 环境总则：`docs/gpu_baseline_setup.md`
+
+## 状态（2026-10-31）
+
+三组均已完成。GPU 数与判定分析见 `docs/npu_gpu_row1_perf_mem_analysis.md`；填数见 `docs/gpu_baseline_perf_mem.md` GPU 实测节。验收总表由 `docs/npu_gpu_acceptance_report.md` 单独维护。

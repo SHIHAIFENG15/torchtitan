@@ -134,6 +134,8 @@ GPU 请用同一三个 CONFIG 按上文命令跑完，填表后再算百分点�
 
 ## GPU 实测结果（2026-10-31，HEAD `7ed23db6` 基线 + perf/mem 配方，容器 `gpu-z00824525-tt`）
 
+详表与判定分析见 [`docs/npu_gpu_row1_perf_mem_analysis.md`](npu_gpu_row1_perf_mem_analysis.md)。
+
 环境：`CUBLAS_WORKSPACE_CONFIG=:4096:8`，`TORCH_DEVICE_BACKEND_AUTOLOAD=1`，`MUSE_DEBUG_DETERMINISTIC=1`（与 NPU 侧一致）。配方未改网格，未改超时（GPU 无 HCCL watchdog 问题）。
 
 | 项 | 结果 |
