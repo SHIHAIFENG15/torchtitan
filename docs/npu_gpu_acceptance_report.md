@@ -208,3 +208,7 @@
 - 单卡稳定 memory：0.26GiB
 - 4 卡稳定 memory：0.11GiB
 - GPU 同配方未跑，两项仍不达标。
+
+## GPU 待跑
+
+性能/内存要闭环，GPU 必须跑的命令与交数表见 `docs/gpu_todo_runs.md`。

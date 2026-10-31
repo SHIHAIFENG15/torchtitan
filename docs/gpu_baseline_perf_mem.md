@@ -1,5 +1,8 @@
 # 第 1 行性能线性度与单卡内存对照
 
+> GPU 必跑清单见 [`docs/gpu_todo_runs.md`](gpu_todo_runs.md)。下面保留完整协议与 NPU 实测表。
+
+
 对齐 `docs/gpu_baseline_setup.md` 里的性能、内存两项。配方加在
 `torchtitan_recipes/tests/models/muse_spark.py`，只服务清单第 1 行
 `muse_spark_debugmodel`。NPU 与 GPU 必须用**同一对 CONFIG**。
