@@ -195,3 +195,7 @@
 下一步（阻塞精度达标）：把六份 step 0 从 GPU 拷到 NPU，用 `scripts/loss_compare.py` 的 load 路径（或 `TORCHTITAN_CHECKPOINT_INITIAL_LOAD_PATH`）跑 NPU 1000 步，再对 `docs/gpu_baseline/*.txt` 算 MAE / 相对误差。
 
 报告依据提交：`7ed23db6`（GPU 基线）及当前 NPU 验收文档。未编造 GPU 数。
+
+## 性能与内存对照怎么补齐
+
+第 1 行已增加 `perf_dp2` / `perf_dp4` / `mem_1device` 配方。跑法与记数表见 `docs/gpu_baseline_perf_mem.md`。未跑完前，总表里性能、内存保持不达标。

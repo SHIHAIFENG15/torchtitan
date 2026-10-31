@@ -231,9 +231,9 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 精度。不达标。要同一份 step 0 权重，两边各跑不少于 1000 步，MoE 平均绝对误差不超过 0.02 或平均相对误差不超过 2%。GPU 1000 步在 `docs/gpu_baseline/debugmodel_1000.txt`；step 0 仍在 GPU 机，NPU 未加载，MAE 没算。10 步各自初始化不是这项。对齐总表见 `docs/npu_gpu_acceptance_report.md`。
 
-性能。不达标。要丢掉前 100 步，比同一配方的 8 卡 tps / 4 卡 tps 和 GPU 的同一比值，差距不超过 2 个百分点。这条世界大小固定是 4，没有 8 卡，也没有满 100 步。GPU 也没测线性度。10 步 tps 不能拿来算。
+性能。不达标（对照配方已加、尚未跑完）。用 `muse_spark_debugmodel_perf_dp2`（4 卡）与 `muse_spark_debugmodel_perf_dp4`（8 卡，只加倍 DP），steps=200，丢掉前 100 步比 8 卡 tps / 4 卡 tps。跑法见 `docs/gpu_baseline_perf_mem.md`。原 10 步验收配方不能算线性度。
 
-内存。不达标。要先比单卡和同场景 GPU，再比 FSDP2 多卡。单卡没跑。4 卡稳定预留 NPU 和 GPU 都是 0.11GiB，只说明这条小模型同量级，盖不住单卡这一档。
+内存。不达标（单卡配方已加、尚未跑完）。用 `muse_spark_debugmodel_mem_1device`（NGPU=1）比日志预留，再比 4 卡 FSDP2。现有 4 卡稳定预留两边都是 0.11GiB，只说明同量级。详见 `docs/gpu_baseline_perf_mem.md`。
 
 确定性。NPU 自己两次达标，和 GPU 对齐不达标。两边各自两次的 loss、grad_norm 都相同。两边互相比从第 1 步就不同，loss 差大约 0.07 到 0.13，没有随步数放大。标准要求同策略结果一致，所以这项不达标。
 

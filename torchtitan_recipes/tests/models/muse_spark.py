@@ -158,6 +158,66 @@ def muse_spark_debugmodel(
     return config
 
 
+
+def muse_spark_debugmodel_perf_dp2(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-1 throughput baseline: same mesh as debugmodel, 200 steps.
+
+    World size 4 = dp_shard 2 x tp 2. Pair with
+    ``muse_spark_debugmodel_perf_dp4`` for the 8-card / 4-card tps ratio.
+    Drop the first 100 steps when scoring.
+    """
+    config = muse_spark_debugmodel(seq_len)
+    config.training.steps = 200
+    return config
+
+
+def muse_spark_debugmodel_perf_dp4(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-1 throughput scale-out: only data_parallel_shard_degree doubled.
+
+    World size 8 = dp_shard 4 x tp 2. Keep tp/ep/batch/seq identical to
+    ``muse_spark_debugmodel_perf_dp2``.
+    """
+    config = muse_spark_debugmodel(
+        seq_len,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=4,
+            tensor_parallel_degree=2,
+            expert_parallel_degree=2,
+            enable_sequence_parallel=True,
+        ),
+    )
+    config.training.steps = 200
+    return config
+
+
+def muse_spark_debugmodel_mem_1device(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-1 single-device memory baseline: all parallel degrees are 1.
+
+    Compare the log ``memory`` field (max reserved in the step window) to the
+    same recipe on GPU. Skip step 1 when compiling inflates the number. Do
+    not use nvidia-smi / npu-smi whole-card occupancy for this bar.
+    """
+    config = muse_spark_debugmodel(
+        seq_len,
+        parallelism=ParallelismConfig(
+            data_parallel_replicate_degree=1,
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=1,
+            expert_parallel_degree=1,
+            pipeline_parallel_degree=1,
+            enable_sequence_parallel=False,
+        ),
+    )
+    config.training.steps = 20
+    return config
+
+
 def muse_spark_debugmodel_with_cp(
     seq_len: int | None = None,
 ) -> Trainer.Config:

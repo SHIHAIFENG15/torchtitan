@@ -269,3 +269,15 @@ debug 配方在 `_use_released_tokenizer_with_debug_model` 之后同样读 `MUSE
 官方 tokenizer 仓库要手动授权。放到 `assets/hf/Muse-Spark-Open-816B-A42B` 的是公开副本里的 tokenizer 文件。`tokenizer.json` 最大 id 是 201817，配置里的词表宽度仍是 202048。没有下 816B 权重。数据只放了 General-Agent 第 1 份，1575113443 字节。
 
 2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=8`，连跑两次（`/workspace/det_ultradata_r1.log`、`r2.log`）。网格是 `dp_shard=2, cp=2, tp=2, ep=8`。10 步 loss、grad_norm 逐项相同，loss 从 12.31145 到 12.28428，grad_norm 从 0.2715 到 0.2656。逐步数字在 `docs/npu_debugmodel_verification.md` 第 5 行。没有单独打印 loss_mask 里有多少个监督 token。
+
+## 17. 第 1 行性能线性度与单卡内存对照配方
+
+验收标准要求：性能用同一配方只加倍 DP，比 8 卡 tps / 4 卡 tps；内存先比单卡日志预留。原 `muse_spark_debugmodel` 世界大小写死为 4、只有 10 步，凑不齐这两项。
+
+在 `torchtitan_recipes/tests/models/muse_spark.py` 增加三个配方，不改原 10 步验收配置：
+
+- `muse_spark_debugmodel_perf_dp2`：网格与基类相同（`dp_shard=2, tp=2, ep=2`），`steps=200`
+- `muse_spark_debugmodel_perf_dp4`：只把 `data_parallel_shard_degree` 改成 4，世界大小 8，`steps=200`
+- `muse_spark_debugmodel_mem_1device`：全部并行度为 1，关掉 sequence parallel，`steps=20`
+
+跑法、记数表和达标判定写在 `docs/gpu_baseline_perf_mem.md`。NPU 与 GPU 必须用同一 CONFIG。跑完后把数填进 `docs/npu_debugmodel_verification.md` 第 1 行和 `docs/npu_gpu_acceptance_report.md`。
