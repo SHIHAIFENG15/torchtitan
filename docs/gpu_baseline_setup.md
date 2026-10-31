@@ -188,6 +188,8 @@ python scripts/loss_compare.py . . \
 
 `loss_compare.py` 造 seed checkpoint 时会把 `checkpointer` 从 None 改成 `CheckpointManager`。如果这一步失败，保留完整 traceback，已经跑完的 10 步仍然有效。不要为了让它通过去改模型数学，也不要把 `deterministic_warn_only` 设成 True。
 
+带 CP 的配方会在写 step 0 时失败，因为并行度被改成 1 之后注意力仍是 CP 内核。处理方式和还没跑的 GPU 命令在 `docs/gpu_baseline_followup.md`。不要在 `bdab0793` 上原样重跑第 2 行①②③的 1000 步。
+
 ## 性能和内存怎么记
 
 从 10 步日志，以及 1000 步那次的训练日志里，按 step 记下 `memory` 和 `tps`。

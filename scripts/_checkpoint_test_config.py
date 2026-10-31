@@ -30,6 +30,54 @@ import os
 from torchtitan.components.checkpointer import CheckpointManager
 
 
+def _select_non_cp_kernel(model):
+    # Seed checkpoints run at cp=1. Swap CP attention back to its base kernel.
+    # convert_config_type only converts toward a subclass, so it cannot undo a
+    # CP wrapper. Copy the base config fields and drop CP-only fields such as
+    # reduce_dtype. Parameters are unchanged. The 1000-step load path does not
+    # call this.
+    from dataclasses import fields
+
+    from torchtitan.models.common.attention import (
+        FlexInnerAttention,
+        InnerAttention,
+        SlidingWindowFlexInnerAttention,
+    )
+    from torchtitan.models.common.attention.cp_attention import (
+        AllGatherKVFlexInnerAttention,
+        AllGatherKVSlidingWindowFlexInnerAttention,
+        CPInnerAttention,
+        UlyssesFlexInnerAttention,
+        UlyssesSlidingWindowFlexInnerAttention,
+    )
+
+    base_of = {
+        UlyssesFlexInnerAttention: FlexInnerAttention,
+        UlyssesSlidingWindowFlexInnerAttention: SlidingWindowFlexInnerAttention,
+        AllGatherKVFlexInnerAttention: FlexInnerAttention,
+        AllGatherKVSlidingWindowFlexInnerAttention: SlidingWindowFlexInnerAttention,
+    }
+    layers = list(getattr(model, "layers", None) or [])
+    layers.extend(getattr(model, "mtp_layers", None) or [])
+    for layer in layers:
+        for _, traversed, parent, field_name in layer.traverse(InnerAttention.Config):
+            owner = traversed._owner
+            base = base_of.get(owner)
+            if base is None:
+                if isinstance(traversed, CPInnerAttention.Config):
+                    raise ValueError(
+                        "seed checkpoint has no non-CP kernel for "
+                        f"{owner.__qualname__}"
+                    )
+                continue
+            kept = {
+                f.name: getattr(traversed, f.name)
+                for f in fields(base.Config)
+                if f.init
+            }
+            setattr(parent, field_name, base.Config(**kept))
+
+
 def checkpoint_test_config():
     try:
         from torchtitan.config import ConfigLoader
@@ -103,6 +151,7 @@ def checkpoint_test_config():
         parallelism.tensor_parallel_degree = 1
         parallelism.pipeline_parallel_degree = 1
         parallelism.expert_parallel_degree = 1
+        _select_non_cp_kernel(trainer_config.model)
         checkpointer.last_save_model_only = True
         if hasattr(trainer_config, "create_seed_checkpoint"):
             trainer_config.create_seed_checkpoint = True
