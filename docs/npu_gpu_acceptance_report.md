@@ -118,6 +118,7 @@ NPU、GPU 各自连跑两次，10 步 loss 和 grad_norm 的打印值相同。�
 
 NPU 自洽（连跑两次打印值相同）已达标。跨设备要求打印值一致；bf16 + 不同后端本就不保证 bit-identical，第 1 步起即可有差、10 步内不发散。共享 step-0 的 1000 步精度项另算。本项按协议字面对 GPU 不达标，**不表示训练发散**。
 
+**复验结果（2026-11-02）**：同一 `outputs/checkpoint-debugmodel/step-0` 重跑 1000 步完成——`docs/gpu_baseline/debugmodel_1000_r2.txt` 与 r1 **逐位相同**（MAE = 0），r2 对 NPU MAE 0.031 / 相对 1.28%，达标结论不变。日志 `logs/debugmodel_precision_r2_gpu.log`。
 
 ---
 
@@ -258,6 +259,7 @@ grad_norm 全段 MAE 0.648、相对误差 41.6%，最大绝对差 8.41 在第 39
 6. 第 2③ 与第 4 行曲线**不可互填**。
 
 
+**复验结果（2026-11-02，实测）**：GPU step-0 重跑 1000 步完成——`docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000_r2.txt` 与 r1 **逐位相同**（MAE = 0），r2 对 NPU MAE 0.031 / MRE 16.82%，与原判定一致，不达标结论稳定可复现（原因分析第 5 点的「预期」已被实测确认）。日志 `logs/mm_fsdp2_precision_r2_gpu.log`。
 ### 性能 — 达标（已闭环）
 
 GPU（2026-11-02，`mm_fsdp2_perf_dp1` / `mm_fsdp2_perf_dp2`，150 步，step>100 共 50 步均值，前后半段 136.0/132.4 与 111.3/107.5，平稳）：
@@ -339,6 +341,7 @@ grad_norm 全段 MAE 0.665、相对误差 67.5%，最大绝对差 12.87 在第 4
 6. 第 2③ 与第 4 行曲线**不可互填**。
 
 
+**复验结果（2026-11-02，实测）**：GPU step-0 重跑 1000 步完成——`docs/gpu_baseline/debugmodel_mm_1000_r2.txt` 与 r1 **逐位相同**（MAE = 0），r2 对 NPU MAE 0.031 / MRE 19.81%，与原判定一致，不达标结论稳定可复现（原因分析第 5 点的「预期」已被实测确认）。日志 `logs/debugmodel_mm_precision_r2_gpu.log`。
 ### 性能 — 达标（已闭环，差 1.31pp）
 
 GPU（2026-11-02，`mm_perf_dp1` / `mm_perf_dp2`，150 步，step>100 共 50 步均值，前后半段 383.2/365.5 与 353.5/362.7）：

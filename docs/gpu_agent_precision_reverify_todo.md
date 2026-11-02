@@ -99,16 +99,19 @@ export 到 `docs/gpu_baseline/debugmodel_mm_1000_r2.txt`，`--baseline-ngpus=8`�
 - 不要跑 Dist-MoE（A100 SM80）。
 - 第 1 行**性能**独占复测是另一件事；本文件只覆盖精度曲线。
 
-## 交数模板
+## 交数
 
 ```text
-日期 / HEAD / 是否独占:
-2③ r2 日志:
-2③ step1 loss (r2 / 旧GPU / NPU):
-2③ GPU_r2 vs GPU_r1 MAE:
-2③ r2 vs NPU MAE / MRE / 结论:
-第4行同上:
-是否误建新 seed（训练日志有无 Loading .../step-0）:
+日期 / HEAD / 是否独占: 2026-11-02 / b188a02c（复验开始时）+ ultradata EP 修复 / 是（daemon 等待全空后顺序执行，一次一个 torchrun）
+2③ r2 日志: logs/mm_fsdp2_precision_r2_gpu.log（1000 步，Training completed，无 ChildFailedError）
+2③ step1 loss (r2 / 旧GPU / NPU): 7.78986 / 7.78986 / 7.79217
+2③ GPU_r2 vs GPU_r1 MAE: 0.000000（1000 步逐位相同）
+2③ r2 vs NPU MAE / MRE / 结论: 0.030999 / 16.82% / 与 r1 对 NPU 的数完全一致；基线可复现，按协议维持不达标
+第4行同上: 日志 logs/debugmodel_mm_precision_r2_gpu.log（1000 步，Training completed）；step1 7.79068 / 7.79068 / 7.79205；GPU_r2 vs GPU_r1 MAE 0.000000；r2 vs NPU 0.030674 / 19.81%；基线可复现，维持不达标
+可选 C（第 1 行）: 已跑。日志 logs/debugmodel_precision_r2_gpu.log（1000 步）；step1 7.84006 / 7.84006 / 7.84031；GPU_r2 vs GPU_r1 MAE 0.000000；r2 vs NPU 0.031049 / 1.28%；达标结论不变
+是否误建新 seed（训练日志有无 Loading .../step-0）: 否。三份训练日志各出现一次 `Loading the checkpoint from .../outputs/checkpoint-*/step-0`，且 GPU_r2_vs_GPU_r1_MAE = 0 证明加载的就是既有 step-0 权重；通过 TORCHTITAN_CHECKPOINT_INITIAL_LOAD_PATH 注入，未让 loss_compare 另建 seed 参与 1000 步
 ```
+
+补充：导出文件 `docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000_r2.txt`、`docs/gpu_baseline/debugmodel_mm_1000_r2.txt`、`docs/gpu_baseline/debugmodel_1000_r2.txt`；输出目录 `outputs/gpu_reverify_*_r2/`。复验用的检查点目录已重排为 `outputs/checkpoint-<配置名>/step-0/`（与本文档 `ls` 预一致；此前为无 step-0 层的平铺布局，`TORCHTITAN_CHECKPOINT_INITIAL_LOAD_PATH` 指向 `outputs/checkpoint-<配置名>`）。
 
 完成后：更新 `docs/gpu_baseline/`（仅新增 r2 文件）、本文件交数节、`docs/npu_gpu_acceptance_report.md` 对应精度小节加一句「GPU 曲线已复验」，以及 `docs/npu_debugmodel_verification.md` 对应配置的精度小节补一行复验数。

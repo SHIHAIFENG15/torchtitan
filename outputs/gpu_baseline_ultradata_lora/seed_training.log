@@ -1,0 +1,55 @@
++ NGPU=1
++ export LOG_RANK=0
++ LOG_RANK=0
++ MODULE=_torchtitan_checkpoint_test_config
++ CONFIG=checkpoint_test_config
++ ENTRYPOINT=torchtitan.train
++ COMM_BACKEND=
++ TORCHFT_LIGHTHOUSE=http://localhost:29510
++ [[ -n '' ]]
++ '[' '' = fake ']'
++ PYTORCH_ALLOC_CONF=expandable_segments:True
++ TORCHFT_LIGHTHOUSE=http://localhost:29510
++ torchrun --nproc_per_node=1 --rdzv_backend c10d --rdzv_endpoint=localhost:0 --local-ranks-filter 0 --role rank --tee 3 -m torchtitan.train --module _torchtitan_checkpoint_test_config --config checkpoint_test_config --output-dir=outputs
+[rank0]:WARNING:absl:Failed to load jax profiler: No module named 'jax'
+[rank0]:[titan] 2026-10-31 04:05:35,053 - __main__ - INFO - torchtitan version: 0.4.0 (0.0.0 means __version__ is not defined correctly).
+[rank0]:[titan] 2026-10-31 04:05:35,130 - torchtitan.config.transform.lora - INFO - LoRA training active with rank=8, alpha=16.0, target_modules=['output_gate', 'w13', 'w2', 'wo', 'wqkv']
+[rank0]:[titan] 2026-10-31 04:05:35,147 - torchtitan.components.checkpointer.base - WARNING - initial_load_model_only=True has no effect without an initial_load_path.
+[rank0]:[titan] 2026-10-31 04:05:35,149 - torchtitan.observability.structured_logger.jsonl_handler - INFO - Structured logging -> JSONL: /home/y00839695/torchtitan/outputs/structured_logs/training.global_rank_0.20261031-040535-5B0OWC.jsonl
+[rank0]:[titan] 2026-10-31 04:05:35,394 - torchtitan.distributed.utils - WARNING - TORCH_NCCL_ASYNC_ERROR_HANDLING=1 will be overridden to 3.
+[rank0]:[titan] 2026-10-31 04:05:35,411 - torchtitan.tools.garbage_collector - INFO - [GC] Initial GC collection took 0.00 seconds
+[rank0]:[titan] 2026-10-31 04:05:35,411 - torchtitan.distributed.utils - INFO - Deterministic algorithm enabled (expect perf degradation).
+[rank0]:[titan] 2026-10-31 04:05:35,422 - torchtitan.observability.metrics - INFO - CUDA capacity: NVIDIA A100-SXM4-80GB with 79.25GiB memory
+[rank0]:[titan] 2026-10-31 04:05:35,423 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,424 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,424 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,425 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,426 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,426 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,427 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,427 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,428 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,428 - torchtitan.config.configurable - WARNING - Config field value of type dtype may not be JSON serializable
+[rank0]:[titan] 2026-10-31 04:05:35,430 - torchtitan.observability.metrics - INFO - TensorBoard logging enabled. Logs will be saved at outputs/tb_seed/20261031-0405
+[rank0]:[titan] 2026-10-31 04:05:35,430 - torchtitan.tools.utils - WARNING - Error running lspci: [Errno 2] No such file or directory: 'lspci', fallback to use device_name
+[rank0]:[titan] 2026-10-31 04:05:35,431 - torchtitan.components.tokenizer - INFO - Loading tokenizer from tokenizer.json
+[rank0]:[titan] 2026-10-31 04:05:37,281 - torchtitan.distributed.parallelism_context - INFO - Building device mesh with parallelism: pp=1, dp_replicate=1, dp_shard=1, cp=1, tp=1, ep=1
+[rank0]:[titan] 2026-10-31 04:05:37,286 - torchtitan.distributed.parallelism_context - INFO - Successfully created meshes with active axes: []
+[rank0]:[titan] 2026-10-31 04:05:37,485 - torchtitan.models.common.flops - INFO - Total parameter count: 113,321,248, active parameters: 56,194,560
+[rank0]:/opt/pytorch-gpu-image/pytorch/torch/distributed/checkpoint/state_dict_saver.py:472: UserWarning: Detected an existing checkpoint in outputs/checkpoint/step-0, overwriting since self.overwrite=True. Past version 2.5 of PyTorch, `overwrite` will default to False. Set this variable to True to maintain this functionality or False to raise when an existing checkpoint is found.
+[rank0]:  local_plan = storage_writer.prepare_local_plan(local_plan)
+[rank0]:[titan] 2026-10-31 04:05:39,406 - torchtitan.training_engine - INFO - Model FrozenMuseSparkModel.Config size: 113,321,248 total parameters
+[rank0]:[titan] 2026-10-31 04:05:39,408 - torchtitan.components.optim.optimizer - INFO - Optimizer AdamW (model_part=0): 80 params [.*] {'lr': 0.0001, 'betas': (0.9, 0.95), 'eps': 1e-08, 'weight_decay': 0.0, 'foreach': None, 'fused': True}
+[rank0]:[titan] 2026-10-31 04:05:39,408 - torchtitan.components.optim.lr_scheduler - WARNING - Warmup steps (2) exceed total steps (1). Adjusting warmup steps to 1.
+[rank0]:[titan] 2026-10-31 04:05:39,409 - torchtitan.components.checkpointer.base - WARNING - initial_load_model_only=True has no effect without an initial_load_path.
+[rank0]:[titan] 2026-10-31 04:05:39,411 - torchtitan.components.checkpointer.dcp - INFO - Checkpointing active. Checkpoints will be loaded from and saved to outputs/checkpoint
+[rank0]:[titan] 2026-10-31 04:05:39,411 - torchtitan.trainer - INFO - Peak FLOPS used for computing MFU: 3.120e+14
+[rank0]:[titan] 2026-10-31 04:05:39,411 - torchtitan.trainer - INFO - CUDA memory usage for model: 0.00GiB(0.00%)
+[rank0]:[titan] 2026-10-31 04:05:39,411 - torchtitan.trainer - INFO - Trainer is initialized with 32768 tokens per DP rank, 65536 tokens per train step, gradient accumulation steps 2, maximum context length 32768, total steps 1 (warmup 2)
+[rank0]:[titan] 2026-10-31 04:05:39,411 - torchtitan.components.checkpointer.dcp - INFO - Saving the checkpointer.
+[rank0]:[titan] 2026-10-31 04:05:39,451 - torchtitan.components.checkpointer.dcp - INFO - Saving a model only checkpoint in torch.float32 at last step, step 0.
+[rank0]:[titan] 2026-10-31 04:05:40,413 - torchtitan.tools.garbage_collector - INFO - [GC] GC collection invoked by checkpointer. took 0.00 seconds
+[rank0]:[titan] 2026-10-31 04:05:40,439 - torchtitan.components.checkpointer.dcp - INFO - Last step checkpoint completed in 1.03s
+[rank0]:[titan] 2026-10-31 04:05:40,439 - __main__ - INFO - Created seed checkpoint
+[rank0]:[titan] 2026-10-31 04:05:40,439 - torchtitan.components.checkpointer.base - INFO - Destroying the purge thread.
+[rank0]:[titan] 2026-10-31 04:05:40,680 - __main__ - INFO - Process group destroyed

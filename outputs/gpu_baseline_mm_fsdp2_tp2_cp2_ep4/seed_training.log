@@ -1,0 +1,72 @@
++ NGPU=1
++ export LOG_RANK=0
++ LOG_RANK=0
++ MODULE=_torchtitan_checkpoint_test_config
++ CONFIG=checkpoint_test_config
++ ENTRYPOINT=torchtitan.train
++ COMM_BACKEND=
++ TORCHFT_LIGHTHOUSE=http://localhost:29510
++ [[ -n '' ]]
++ '[' '' = fake ']'
++ PYTORCH_ALLOC_CONF=expandable_segments:True
++ TORCHFT_LIGHTHOUSE=http://localhost:29510
++ torchrun --nproc_per_node=1 --rdzv_backend c10d --rdzv_endpoint=localhost:0 --local-ranks-filter 0 --role rank --tee 3 -m torchtitan.train --module _torchtitan_checkpoint_test_config --config checkpoint_test_config --output-dir=outputs
+[rank0]:WARNING:absl:Failed to load jax profiler: No module named 'jax'
+[rank0]:[titan] 2026-10-30 10:03:48,864 - __main__ - INFO - torchtitan version: 0.4.0 (0.0.0 means __version__ is not defined correctly).
+[rank0]:[titan] 2026-10-30 10:03:49,074 - torchtitan.components.checkpointer.base - WARNING - initial_load_model_only=True has no effect without an initial_load_path.
+[rank0]:Traceback (most recent call last):
+[rank0]:  File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:  File "<frozen runpy>", line 88, in _run_code
+[rank0]:[titan] 2026-10-30 10:03:49,076 - torchtitan.observability.structured_logger.jsonl_handler - INFO - Structured logging -> JSONL: /home/y00839695/torchtitan/outputs/structured_logs/training.global_rank_0.20261030-100349-Z9ASHG.jsonl
+[rank0]:  File "/home/y00839695/torchtitan/torchtitan/train.py", line 72, in <module>
+[rank0]:    main()
+[rank0]:  File "/home/y00839695/torchtitan/torchtitan/train.py", line 46, in main
+[rank0]:    trainer = config.build()
+[rank0]:              ^^^^^^^^^^^^^^
+[rank0]:  File "/home/y00839695/torchtitan/torchtitan/config/configurable.py", line 158, in build
+[rank0]:    return self._owner(config=replace(self))
+[rank0]:                              ^^^^^^^^^^^^^
+[rank0]:  File "/usr/lib/python3.12/dataclasses.py", line 1581, in replace
+[rank0]:    return obj.__class__(**changes)
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:  File "<string>", line 24, in __init__
+[rank0]:  File "/home/y00839695/torchtitan/torchtitan/trainer.py", line 86, in __post_init__
+[rank0]:    validate_model_training_config(
+[rank0]:  File "/home/y00839695/torchtitan/torchtitan/config/validation.py", line 147, in validate_model_training_config
+[rank0]:    validate_context_parallel(model, parallelism)
+[rank0]:  File "/home/y00839695/torchtitan/torchtitan/config/validation.py", line 175, in validate_context_parallel
+[rank0]:    raise ValueError(
+[rank0]:ValueError: layers.0.attention.inner_attention is CPInnerAttention but the context parallel degree is 1. Select a non-CP kernel.
+E1030 10:03:50.239000 28929 torch/distributed/elastic/multiprocessing/api.py:1002] failed (exitcode: 1) local_rank: 0 (pid: 28997) of binary: /usr/bin/python3
+Traceback (most recent call last):
+  File "/usr/local/bin/torchrun", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/pytorch-gpu-image/pytorch/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 380, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/opt/pytorch-gpu-image/pytorch/torch/distributed/run.py", line 1138, in main
+    run(args)
+  File "/opt/pytorch-gpu-image/pytorch/torch/distributed/run.py", line 1129, in run
+    elastic_launch(
+  File "/opt/pytorch-gpu-image/pytorch/torch/distributed/launcher/api.py", line 197, in __call__
+    return launch_agent(
+           ^^^^^^^^^^^^^
+  File "/opt/pytorch-gpu-image/pytorch/torch/distributed/launcher/api.py", line 386, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+torchtitan.train FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-10-30_10:03:50
+  host      : node-5-15
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 28997) 
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
