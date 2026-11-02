@@ -91,6 +91,25 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 精度。不达标。1000 步 loss MAE 0.03100，平均相对误差 16.82%。两条门槛都没过。grad_norm 相对误差 41.6%，不进精度门槛。数在 `docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`。这组数不能填第 4 行。
 
+#### 精度不达标：队内根因分析（对外摘要见验收报告）
+
+协议：同一 step 0，≥1000 步，MoE 满足 MAE≤0.02 **或** MRE≤2% 即过。本行两条都不过：MAE **0.03100**，MRE **16.82%**（`docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`）。
+
+**不是「没加载上权重」。** 第 1 步 NPU 7.79217 / GPU 7.78986，差约 2.3e-3，与各自随机初始化的 10 步差（0.03～0.15）不是同一量级。日志有 `Loading the checkpoint from .../checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`。
+
+**主因是 debug 多模态尺度下的过拟合 + 相对误差分母塌缩，不是训练中途炸了。**
+
+1. 两端 loss 都从 ~7.79 掉到第 1000 步的 ~0.0019 / ~0.0034。绝对差在后段往往很小，但 GPU loss≈3e-3 时，同样 1e-4 量级的绝对差会被 MRE 放成很大的相对误差。
+2. 分窗口：1–100 MRE 2.73%；101–500 12.41%；**501–1000 的 MAE 0.015 单独能过绝对门槛，但 MRE 23.17%**——说明后半段「绝对更近、相对更差」，典型的小 loss 分母效应，不是前 100 步把全段平均拉爆。
+3. 最大绝对差 0.270 在约第 402 步（中段），与视觉/打包长度变化、flex 重编译步重合；两边都会在部分步把 tps 打到个位数，属同一类编译抖动，不能单独当成 NPU 算子错误证据。
+4. GPU 路径上 `grid_sample` 反传曾走 CPU，多模态数值栈与 NPU 不完全同构；这会贡献设备差，但**即使抹平到只剩过拟合放大，MRE 仍很难靠「再跑一轮」掉进 2%**。
+5. **不要填第 4 行。** 第 4 行 `debugmodel_mm` 是另一套配置/曲线（MAE 0.031 / MRE 19.8%），机制同类，数不能混用。
+
+**和「再跑能否翻盘」。** GPU 侧按 `docs/gpu_agent_precision_reverify_todo.md` 用**同一 step 0**复验曲线，目的是证明基线可复现、排除偶发争卡/错权重；**预期仍不达标**。若要改结论，只能改验收窗口/标准（例如只看绝对误差或截断过拟合段），那是口径变更，不是重验失败变成功。
+
+grad_norm 全段 MAE 0.648、MRE 41.6%，不进精度门槛。
+
+
 性能。NPU 已测，待 GPU。见第 2 行③正文：`mm_fsdp2_perf_dp1/dp2` 线性度 **0.8106**。
 
 内存。NPU 已测，待 GPU。单卡 **0.28GiB**，4 卡稳定 **0.15GiB**。nvidia-smi 整卡占用不进这项。
@@ -332,7 +351,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 这是没开确定性种子的旧跑，只说明 8 卡循环能走完。正式确定性两次见文首「第 2 行 ③」。
 
-精度。这趟没有 1000 步共享权重，不达标。第 1 步离 `ln(2048)` 差 0.037，只说明尺度。开种子的 1000 步精度见文首「第 2 行 ③」与 `docs/npu_gpu_acceptance_report.md`（不达标）。
+精度。这趟（无种子 10 步）没有 1000 步共享权重，不能当精度项。开种子的 1000 步正式结论见文首「第 2 行 ③」队内根因分析与 `docs/npu_gpu_acceptance_report.md` 对外口径（不达标）。
 
 性能。NPU 已测，待 GPU。`mm_fsdp2_perf_dp1` / `perf_dp2`：step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。日志 `logs/mm_fsdp2_perf_dp1_npu.log`、`logs/mm_fsdp2_perf_dp2_npu.log`。
 
@@ -478,6 +497,11 @@ mxfp8 配置没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 | bank indices 与 token 分片对齐 | 占位符上的 bank index 是切分前的绝对行号 0..n-1，其余为 -1。CP=2 切开后 rank0 为 `[-1,-1,0,1,2,-1,-1,-1]`，rank1 为 `[-1,-1,3,4,-1,-1,-1,-1]`，rank1 不从 0 重计。gather 把这些行写回占位符。run 数和 item token 数不一致会抛 `ValueError` |
 
 精度。不达标。1000 步 loss MAE 0.03067，平均相对误差 19.81%。两条门槛都没过。grad_norm 相对误差 67.5%，不进精度门槛。数在 `docs/npu_baseline/debugmodel_mm_mae.txt`。不要用第 2 行③的曲线填这里。
+
+#### 精度不达标：队内根因（与第 2③ 同类）
+
+MAE **0.03067**，MRE **19.81%**（`docs/npu_baseline/debugmodel_mm_mae.txt`）。第 1 步已对齐加载。第 1000 步两端 loss ~1e-3 量级；后段 MRE 被小分母放大。机制与第 2③ 相同（debug 多模态过拟合），**不要用 2③ 曲线填本行，也不要用本行填 2③**。GPU 复验见 `docs/gpu_agent_precision_reverify_todo.md` 任务 B。对外口径：协议下不通过；属 debug 尺度过拟合导致的相对误差放大，非未加载权重。
+
 
 性能。NPU 已测，待 GPU。`mm_perf_dp1` / `mm_perf_dp2`：step>100 平均 tps **118.56** / **114.96**，线性度 **0.9696**。日志 `logs/mm_perf_dp1_npu.log`、`logs/mm_perf_dp2_npu.log`。
 

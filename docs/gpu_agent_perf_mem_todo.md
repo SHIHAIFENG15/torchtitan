@@ -213,3 +213,5 @@ print("completed", "Training completed" in text)
 PY
 logs/with_cp_perf_dp1_npu.log
 ```
+
+精度曲线复验（2③ / 第 4 行）见 `docs/gpu_agent_precision_reverify_todo.md`。

@@ -235,7 +235,7 @@ export MUSE_DEBUG_DETERMINISTIC=1
 | P1 | 第 1 行性能线性度差 3.20pp > 2 | 性能项不通过 | 已用干净重跑；可独占复测 `perf_dp4`；NPU 扩展效率优于 GPU | 打开 |
 | P2 | GPU 首轮 8 卡 `perf_dp4` 争卡退化 | 该日志作废 | 改用 `perf_dp4_gpu_r2.log` | 已关闭 |
 | P3 | 第 2 行①②③ GPU 同 CONFIG 未跑 | 性能/内存不能闭环判定 | 见 `docs/gpu_agent_perf_mem_todo.md` | 打开 |
-| P4 | 第 2③ 精度 MRE 16.8% / MAE 0.031 | 精度不通过 | debug 多模态过拟合 + 相对误差放大；勿填第 4 行 | 打开 |
+| P4 | 第 2③ 精度 MRE 16.8% / MAE 0.031 | 精度不通过 | debug 多模态过拟合 + 相对误差放大；勿填第 4 行；队内分析见 verification，对外口径见 acceptance；GPU 复验  | 打开 |
 | P5 | 910B flex / Inductor / remat 需补丁与 ascend 入口 | 否则编译超时或段错误 | `docs/npu_910b_patches/` + torchtitan-ascend；`COMPILE_THREADS=1` | 已关闭（环境项） |
 | P6 | NPU 8 卡首步 flex 超默认 300s watchdog | 训练失败 | `init/train_timeout_seconds=1800` 写入 perf 配置 | 已关闭 |
 
@@ -267,3 +267,5 @@ export MUSE_DEBUG_DETERMINISTIC=1
 | `make_charts.py` | 无 matplotlib 依赖的 SVG 生成脚本 |
 
 报告作者：AI assistant（据仓库已提交数据整理，未编造 GPU 性能数）。
+
+> 精度不通过的**队内详细根因**见  第 2③；**对外验收口径**见 。GPU 复验任务：。
