@@ -190,6 +190,11 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 性能。不达标（NPU、GPU 同配置对照已闭环）。NPU `perf_dp2` 稳定段平均 tps 322.89，`perf_dp4` 307.98，线性度 0.9538。GPU 同配置：`perf_dp2` 1003.27，`perf_dp4` 924.81，线性度 0.9218。与 NPU 差 |0.9538 − 0.9218| × 100 = 3.20 个百分点，超过 2 个百分点阈值，判定不达标。
 
+#### 原因分析（性能）
+
+差 3.20pp 只来自线性度。NPU 4→8 掉 4.6%，GPU 掉 7.8%——**GPU 扩展更差**。绝对 tps 不进门槛。与第 5 行（NPU 掉更多）方向相反。详述见 `docs/npu_gpu_acceptance_report.md` 第 1 行。
+
+
 内存。达标（NPU、GPU 单卡与 4 卡对照已闭环）。NPU `mem_1device` 稳定预留 0.26GiB；4 卡稳定预留 0.11GiB。GPU 单卡 0.24GiB（step2–20）；4 卡 0.11GiB（`perf_dp2` step>100）。单卡差 0.02GiB，4 卡持平，判定达标。原始日志 `logs/mem_1device_gpu.log`、`logs/perf_dp2_gpu.log`。
 
 确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
@@ -233,6 +238,11 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 内存。不达标（NPU、GPU 同配方对照已闭环，GPU 预留显著更高）。单卡 `muse_spark_debugmodel_with_cp_mem_1device`（全并行度 1，无 CP）step 2–20：NPU 稳定 **0.25GiB**（`logs/with_cp_mem_1device_npu.log`）；GPU **1.47–3.85GiB，随步单调爬升，无稳定值**（末步 3.85；`logs/with_cp_mem_1device_gpu.log`），约为 NPU 的 6–15 倍。4 卡 `with_cp_perf_dp1`：NPU **0.10GiB**，GPU **0.65GiB**（约 6.5 倍）。两条都不同量级，判不达标。GPU 爬升疑似 caching allocator（expandable_segments）对多形状 flex attention 的预留增长或 CP→非 CP 内核回退路径差异；对照参考：第 1 行无 CP 内核的 `mem_1device` 在 GPU 上是平稳的 0.24GiB（与 NPU 0.26 同量级），说明爬升与这条配置路径相关。
 
+#### 原因分析（内存 A：GPU 预留爬升）
+
+日志 `memory` 是预留不是整卡占用。第 1 行无 CP 单卡两边同量级且不爬；本行带 CP 路径后 GPU 爬升 → 跟 **CP / 多形状 flex / CUDA caching allocator 预留** 相关，不是整机口径问题。不宜写成「NPU 更省显存」。详见验收报告总览「内存 A」。
+
+
 确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ### ② `muse_spark_debugmodel_fsdp2_cp2_ep4`
@@ -262,6 +272,11 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 性能。达标（NPU、GPU 同配方对照已闭环）。NPU `fsdp2_perf_dp2` / `fsdp2_perf_dp4`：step>100 平均 tps **121.64** / **116.24**，线性度 **0.9556**（`logs/fsdp2_perf_dp2_npu.log`、`logs/fsdp2_perf_dp4_npu.log`）。GPU 同 CONFIG（`dp_shard=2, cp=2, tp=1, ep=4` 4 卡 / `dp_shard=4` 8 卡，各 200 步）：**335.02** / **324.08**，线性度 **0.9673**（前后半段 335.3/334.7，平稳；`logs/fsdp2_perf_dp2_gpu.log`、`logs/fsdp2_perf_dp4_gpu.log`）。差 |0.9556 − 0.9673| × 100 = **1.17 个百分点 ≤ 2**，达标。
 
 内存。不达标（GPU 单卡预留显著更高且随步爬升）。NPU 单卡 `fsdp2_mem_1device` **0.25GiB**、4 卡稳定 **0.12GiB**（`logs/fsdp2_mem_1device_npu.log`）。GPU 单卡 **1.46–3.85GiB，随步单调爬升，无稳定值**（末步 3.85；`logs/fsdp2_mem_1device_gpu.log`），4 卡 **0.49GiB**。单卡约 6–15 倍、4 卡约 4 倍，不同量级，判不达标。爬升现象与第 2① 一致（caching allocator 预留增长），建议两侧一起核查口径后复测。
+
+#### 原因分析（内存 A：GPU 预留爬升）
+
+与第 2① 同类：GPU 预留爬升、NPU 平稳。机制与复测建议同「内存 A」（见验收报告总览）。
+
 
 确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
@@ -311,6 +326,11 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 性能。达标（NPU、GPU 同配方对照已闭环）。NPU `mm_fsdp2_perf_dp1` / `perf_dp2`：step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。GPU：**134.18** / **109.40**，线性度 **0.8153**。差 **0.47pp ≤ 2**。视觉长度重编译掉速步两边都有，记数仍按 step>100 全平均。
 
 内存。不达标（已闭环）。NPU 单卡 **0.28GiB**、4 卡 **0.15GiB**；GPU 单卡 **2.39–14.15GiB（随步爬升，末 14.15）**、4 卡 **2.24GiB**。不同量级。
+
+#### 原因分析（内存 A：GPU 预留爬升）
+
+与第 2①② 同类，多模态末值更高（视觉长度重编译尖峰）。属「内存 A」，见验收报告。
+
 
 确定性。达标（见文首正确跑法两次）。跨设备打印值不要求一致。
 
@@ -422,6 +442,11 @@ MAE **0.03067**，MRE **19.81%**（`docs/npu_baseline/debugmodel_mm_mae.txt`）�
 
 内存。不达标（GPU 单卡预留显著更高且随步爬升）。NPU 单卡 `mm_mem_1device` **0.28GiB**、4 卡稳定 **0.15GiB**（`logs/mm_mem_1device_npu.log`）。GPU 单卡 **2.34–14.15GiB，随步单调爬升，无稳定值**（末步 14.15，含一次视觉长度重编译的预留尖峰；`logs/mm_mem_1device_gpu.log`），4 卡 **3.19GiB**。单卡约 8–50 倍、4 卡约 21 倍，不同量级，判不达标。爬升现象与第 2①② 一致（caching allocator 预留增长），建议两侧一起核查口径后复测。
 
+#### 原因分析（内存 A：GPU 预留爬升）
+
+与第 2①②③ 同类（内存 A）。精度不达标分析见上文「精度不达标：精度原因分析」与验收报告。
+
+
 确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ---
@@ -471,6 +496,16 @@ loss 停在 12.27 到 12.31，是因为词表宽度 202048，`ln(202048)` 约 12
 
 性能。不达标（NPU、GPU 同配方对照已闭环）。NPU `ultradata_perf_dp1` / `perf_dp2`（120 步，step>100）：**378.25** / **340.05**，线性度 **0.8990**（定稿 8 卡日志 `logs/ultradata_perf_dp2_npu.ep8.log`）。GPU：**10230.50** / **9874.95**，线性度 **0.9652**。差 **6.62pp > 2**。绝对 tps 不可与第 1 行横比。`perf_dp1` 的 EP=4 修正见配方。
 
+#### 原因分析（性能）
+
+NPU 线性度 0.899、GPU 0.965——**NPU 掉更多**，与第 1 行相反。32K LoRA + EP4→8 路径；定稿用 `ultradata_perf_dp2_npu.ep8.log`。详见验收报告第 5 行。
+
+
 内存。不达标（已闭环）。NPU 单卡 **13.25GiB**、4 卡 **4.32GiB**；GPU 单卡 **0.24–0.54GiB（随步爬升）**、4 卡 **0.44GiB**。方向与短序列行相反，需单独核查 32K 路径。
+
+#### 原因分析（内存 B：方向反过来）
+
+NPU 预留远高于 GPU（约 24×），不能套用「GPU allocator 虚高」。32K + LoRA 路径单独查；见验收报告总览「内存 B」。
+
 
 确定性。达标。NPU 两次 loss、grad_norm 逐项相同。INFO 日志里没有 `Dropping sample`。

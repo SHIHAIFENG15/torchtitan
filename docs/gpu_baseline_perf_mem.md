@@ -172,6 +172,26 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 
 内存记数说明：GPU 端各 mem_1device 日志的 `memory` 普遍随步单调爬升（缓存预留增长），与 NPU 侧平稳值不同口径，按协议如实记录区间与末值；达标判定待两侧口径确认后复核。
 
+## 不达标项原因分析（2026-11-02 闭环后）
+
+与 `docs/npu_gpu_acceptance_report.md`「不达标项总览与读法」一致，本文件只记 perf/mem 相关：
+
+### 性能
+
+| 行 | 差 | 谁掉更多 | 读法 |
+| --- | --- | --- | --- |
+| 1 | 3.20pp | GPU（0.92 vs NPU 0.95） | 阈值超线；不是 NPU 吞吐更差 |
+| 2①②③、4 | ≤1.35pp | — | 达标 |
+| 5 | 6.62pp | NPU（0.899 vs GPU 0.965） | 32K LoRA + EP 加倍；与第 1 行方向相反 |
+
+### 内存
+
+**内存 A（2①②③、4）**：GPU `memory` 随步爬升，NPU 平稳。第 1 行无 CP 单卡两边 ~0.25 且不爬 → 爬升跟 **CP / 多形状 flex / CUDA caching allocator 预留** 相关。日志字段是预留不是整卡占用。
+
+**内存 B（5）**：方向反过来——NPU 13.25 vs GPU ~0.5。不能套用内存 A 的解释；32K LoRA 路径单独核查。
+
+复测建议：统一 allocator（如关闭 expandable_segments）、取稳定平台值；第 5 行另做长序列预留语义核对。
+
 ## NPU 实测结果（2026-10-31，`e8bd720c`+超时补丁，容器 `npu-y00839695-torchtitan-20261028`）
 
 环境：`ENTRYPOINT=torchtitan_ascend.train`，`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`，`TORCHINDUCTOR_COMPILE_THREADS=1`，`TORCHNPU_PRECOMPILE_THREADS=1`。`perf_*` 配方另设 `init_timeout_seconds=train_timeout_seconds=1800`（8 卡首步 flex 编译会超过默认 300s watchdog）。
