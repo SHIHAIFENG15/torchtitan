@@ -106,10 +106,45 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 - 改配方或补丁记 `docs/npu_pta_fixes.md`。
 - 没跑完之前，性能/内存结论保持「不达标（对照未跑）」；填表后才能改判定。
 
-## 尚未覆盖
+## 第 2① `with_cp` 配方（NPU 已跑，GPU 待跑）
 
-第 2① `with_cp` 的 4↔8 与单卡（单卡须非 CP 内核）、第 4/5 行的 4 卡减半变体，等第 1 行这套跑通后再复制。
+| CONFIG | NGPU | 网格 | steps | 用途 |
+| --- | --- | --- | --- | --- |
+| `muse_spark_debugmodel_with_cp_perf_dp1` | 4 | `dp_shard=1, cp=2, tp=2, ep=2` | 200 | 性能分母 |
+| `muse_spark_debugmodel_with_cp_perf_dp2` | 8 | `dp_shard=2, cp=2, tp=2, ep=2` | 200 | 性能分子（只加倍 DP） |
+| `muse_spark_debugmodel_with_cp_mem_1device` | 1 | 全部并行度 1（无 CP） | 20 | 单卡内存 |
 
+```bash
+NGPU=4 MODULE=torchtitan_recipes.tests.models.muse_spark \
+  CONFIG=muse_spark_debugmodel_with_cp_perf_dp1 \
+  ./run_train.sh | tee logs/with_cp_perf_dp1_gpu.log
+
+NGPU=8 MODULE=torchtitan_recipes.tests.models.muse_spark \
+  CONFIG=muse_spark_debugmodel_with_cp_perf_dp2 \
+  ./run_train.sh | tee logs/with_cp_perf_dp2_gpu.log
+
+NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
+  CONFIG=muse_spark_debugmodel_with_cp_mem_1device \
+  ./run_train.sh | tee logs/with_cp_mem_1device_gpu.log
+```
+
+### NPU 实测（2026-11-02，容器 `npu-y00839695-torchtitan-20261028`）
+
+| 端 | 4 卡稳定 tps (step>100) | 8 卡稳定 tps (step>100) | 线性度 | 与对端差（百分点） | 结论 |
+| --- | --- | --- | --- | --- | --- |
+| NPU | 148.53 | 144.21 | 0.9709 | | 待 GPU |
+| GPU | | | | | 未跑 |
+
+| 端 | 单卡稳定 memory (GiB) | 4 卡稳定 memory (GiB) | 结论 |
+| --- | --- | --- | --- |
+| NPU | 0.25 | 0.10 | 待 GPU |
+| GPU | | | 未跑 |
+
+日志：`logs/with_cp_perf_dp1_npu.log`、`logs/with_cp_perf_dp2_npu.log`、`logs/with_cp_mem_1device_npu.log`。
+
+## 尚未覆盖 / GPU 待跑
+
+配方已扩展到第 2①②③、4、5 行（及 Dist-MoE 仅 NPU）。**GPU 侧完整必跑清单与命令**见 [`docs/gpu_agent_perf_mem_todo.md`](gpu_agent_perf_mem_todo.md)。第 1 行 GPU 已闭环；其余行等 GPU 填数后再改验收判定。
 
 ## NPU 实测结果（2026-10-31，`e8bd720c`+超时补丁，容器 `npu-y00839695-torchtitan-20261028`）
 

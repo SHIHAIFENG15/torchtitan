@@ -76,7 +76,7 @@ NGPU=8 MODULE=torchtitan_recipes.tests.models.muse_spark \
 ## 不算本次必跑
 
 - 再导出 1000 步 / 再建 step 0（已有）。
-- 第 2① / 4 / 5 的 perf·mem 变体（等第 1 行 GPU 对照闭环后再复制）。
+- 第 2①②③ / 4 / 5 的 GPU perf·mem：见 `docs/gpu_agent_perf_mem_todo.md`（配方已加）。
 - NPU 加载 step 0 算 MAE（在 NPU 做，不是 GPU 再跑训练）。
 
 ## 参考
@@ -88,3 +88,5 @@ NGPU=8 MODULE=torchtitan_recipes.tests.models.muse_spark \
 ## 状态（2026-10-31）
 
 三组均已完成。GPU 数与判定分析见 `docs/npu_gpu_row1_perf_mem_analysis.md`；填数见 `docs/gpu_baseline_perf_mem.md` GPU 实测节。验收总表由 `docs/npu_gpu_acceptance_report.md` 单独维护。
+
+其余行（2①②③ / 4 / 5）GPU 必跑见 `docs/gpu_agent_perf_mem_todo.md`。

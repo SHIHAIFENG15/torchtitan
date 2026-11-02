@@ -250,6 +250,75 @@ def muse_spark_debugmodel_with_cp(
     )
 
 
+def muse_spark_debugmodel_with_cp_perf_dp1(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-2 with_cp throughput baseline: same mesh as with_cp, 200 steps.
+
+    World size 4 = dp_shard 1 x cp 2 x tp 2. Pair with
+    ``muse_spark_debugmodel_with_cp_perf_dp2`` for the 8-card / 4-card tps
+    ratio. Drop the first 100 steps when scoring.
+    """
+    config = muse_spark_debugmodel_with_cp(seq_len)
+    config.training.steps = 200
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_with_cp_perf_dp2(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-2 with_cp throughput scale-out: only data_parallel_shard_degree doubled.
+
+    World size 8 = dp_shard 2 x cp 2 x tp 2. Keep cp/tp/ep/batch/seq identical
+    to ``muse_spark_debugmodel_with_cp_perf_dp1``.
+    """
+    config = muse_spark_debugmodel(
+        seq_len,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=2,
+            tensor_parallel_degree=2,
+            expert_parallel_degree=2,
+            enable_sequence_parallel=True,
+        ),
+    )
+    config.parallelism.context_parallel_degree = 2
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    config.override.imports = []
+    config.training.steps = 200
+    return apply_transforms(
+        config,
+        [_muse_spark_context_parallel_transform()],
+    )
+
+
+def muse_spark_debugmodel_with_cp_mem_1device(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-2 with_cp single-device memory: all parallel degrees are 1 (no CP).
+
+    Protocol needs a non-CP kernel for the 1-device bar. Compare log
+    ``memory`` to the same CONFIG on GPU. Skip step 1 when compile inflates
+    the number.
+    """
+    config = muse_spark_debugmodel(
+        seq_len,
+        parallelism=ParallelismConfig(
+            data_parallel_replicate_degree=1,
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=1,
+            expert_parallel_degree=1,
+            pipeline_parallel_degree=1,
+            enable_sequence_parallel=False,
+        ),
+    )
+    config.override.imports = []
+    config.training.steps = 20
+    return config
+
+
 def muse_spark_debugmodel_dist_moe_bf16(
     seq_len: int | None = None,
 ) -> Trainer.Config:
@@ -292,6 +361,7 @@ def muse_spark_debugmodel_mm(
     *,
     parallelism: ParallelismConfig | None = None,
     context_parallel_transform: ContextParallelTransform | None = None,
+    context_parallel_degree: int = 2,
 ) -> Trainer.Config:
     """Pack mixed CC12M test images and synthetic audio/video at equal weights."""
     from torchtitan.components.data.multimodal.mm_datasets import (
@@ -306,7 +376,7 @@ def muse_spark_debugmodel_mm(
     )
 
     config = muse_spark_debugmodel(seq_len, parallelism=parallelism)
-    config.parallelism.context_parallel_degree = 2
+    config.parallelism.context_parallel_degree = context_parallel_degree
     model_config = build_model_config(
         "debugmodel_mm",
         seq_len=seq_len,
@@ -356,15 +426,135 @@ def muse_spark_debugmodel_mm(
         ),
         collator=replace(video_loader.collator, max_images_per_microbatch=128),
     )
-    if context_parallel_transform is None:
-        context_parallel_transform = _muse_spark_context_parallel_transform()
     # A new packed-vision length recompiles flex attention. On 910B that
     # exceeds the default 100s training collective timeout.
     config.comm.train_timeout_seconds = 1800
+    if context_parallel_degree <= 1:
+        return config
+    if context_parallel_transform is None:
+        context_parallel_transform = _muse_spark_context_parallel_transform()
     return apply_transforms(
         config,
         [context_parallel_transform],
     )
+
+
+def muse_spark_debugmodel_mm_perf_dp1(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-4 throughput baseline: half DP of the 8-card mm recipe, 150 steps.
+
+    World size 4 = dp_shard 1 x cp 2 x tp 2. Pair with
+    ``muse_spark_debugmodel_mm_perf_dp2``. Drop the first 100 steps when scoring.
+    """
+    config = muse_spark_debugmodel_mm(
+        seq_len,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=2,
+            expert_parallel_degree=2,
+            enable_sequence_parallel=True,
+        ),
+    )
+    config.training.steps = 150
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    config.override.imports = []
+    return config
+
+
+def muse_spark_debugmodel_mm_perf_dp2(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-4 throughput scale-out: checklist 8-card mm mesh, 150 steps."""
+    config = muse_spark_debugmodel_mm(seq_len)
+    config.training.steps = 150
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    config.override.imports = []
+    return config
+
+
+def muse_spark_debugmodel_mm_mem_1device(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-4 single-device memory: all parallel degrees 1, no CP."""
+    config = muse_spark_debugmodel_mm(
+        seq_len,
+        parallelism=ParallelismConfig(
+            data_parallel_replicate_degree=1,
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=1,
+            expert_parallel_degree=1,
+            pipeline_parallel_degree=1,
+            enable_sequence_parallel=False,
+        ),
+        context_parallel_degree=1,
+    )
+    config.override.imports = []
+    config.training.steps = 20
+    return config
+
+
+def muse_spark_debugmodel_dist_moe_bf16_perf_dp2(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-3 Dist-MoE bf16 throughput baseline (4 cards), 200 steps."""
+    config = muse_spark_debugmodel_dist_moe_bf16(seq_len)
+    config.training.steps = 200
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_dist_moe_bf16_perf_dp4(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-3 Dist-MoE bf16 scale-out: only dp_shard doubled to 4 (8 cards)."""
+    config = _with_dist_moe(
+        muse_spark_debugmodel(
+            seq_len,
+            parallelism=ParallelismConfig(
+                data_parallel_shard_degree=4,
+                tensor_parallel_degree=2,
+                expert_parallel_degree=2,
+                enable_sequence_parallel=True,
+            ),
+        ),
+        expert_precision="bf16",
+        scratch_capacity_factor=2.0,
+    )
+    config.training.disable_cuda_graphs = True
+    config.model.local_compile_regions = ["loss", "fp32_to_bf16_split"]
+    config.training.steps = 200
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_dist_moe_bf16_mem_1device(
+    seq_len: int | None = None,
+) -> Trainer.Config:
+    """Row-3 Dist-MoE bf16 single-device memory: all parallel degrees 1."""
+    config = _with_dist_moe(
+        muse_spark_debugmodel(
+            seq_len,
+            parallelism=ParallelismConfig(
+                data_parallel_replicate_degree=1,
+                data_parallel_shard_degree=1,
+                tensor_parallel_degree=1,
+                expert_parallel_degree=1,
+                pipeline_parallel_degree=1,
+                enable_sequence_parallel=False,
+            ),
+        ),
+        expert_precision="bf16",
+        scratch_capacity_factor=2.0,
+    )
+    config.training.disable_cuda_graphs = True
+    config.model.local_compile_regions = ["loss", "fp32_to_bf16_split"]
+    config.training.steps = 20
+    return config
 
 
 def _use_released_tokenizer_with_debug_model(config: Trainer.Config) -> None:
@@ -382,8 +572,12 @@ def _use_released_tokenizer_with_debug_model(config: Trainer.Config) -> None:
     loss_config.loss_fn.global_vocab_size = model_config.vocab_size
 
 
-def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
-    """Configure ten-step UltraData LoRA SFT with a debug model on 8 GPUs."""
+def muse_spark_debugmodel_ultradata_lora_sft(
+    *,
+    data_parallel_shard_degree: int = 2,
+    steps: int = 10,
+) -> Trainer.Config:
+    """Configure UltraData LoRA SFT with a debug model (default 8 GPUs, 10 steps)."""
     config = muse_spark_debugmodel_with_cp(seq_len=32_768)
     _use_released_tokenizer_with_debug_model(config)
     # huggingface.co is reset from this machine. Read the staged JSONL, the
@@ -397,9 +591,9 @@ def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
     config.optim = _ultradata_lora_sft_optim(warmup_steps=2)
     config.training = TrainingConfig(
         num_tokens_per_microbatch_per_dp_rank=32_768,
-        num_tokens_per_train_step=65_536,
+        num_tokens_per_train_step=32_768 * data_parallel_shard_degree,
         max_context_length=32_768,
-        steps=10,
+        steps=steps,
         dtype="bfloat16",
         mixed_precision_param="bfloat16",
         mixed_precision_reduce="float32",
@@ -407,7 +601,7 @@ def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
     )
     config.parallelism = ParallelismConfig(
         data_parallel_replicate_degree=1,
-        data_parallel_shard_degree=2,
+        data_parallel_shard_degree=data_parallel_shard_degree,
         tensor_parallel_degree=2,
         context_parallel_degree=2,
         expert_parallel_degree=8,
@@ -416,6 +610,71 @@ def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
         context_parallel_load_balancer=None,
     )
     config.comm.train_timeout_seconds = 1800
+    config.activation_remat = FullActivationRematConfig()
+    config.model.local_compile_regions = ["loss"]
+    config.debug.seed = 42
+    return apply_transforms(config, [_ultradata_lora_sft_transform()])
+
+
+def muse_spark_debugmodel_ultradata_lora_sft_perf_dp1() -> Trainer.Config:
+    """Row-5 throughput baseline: half DP (4 cards), 120 steps.
+
+    32K steps are expensive; 120 still leaves step>100 for the stable mean.
+    """
+    config = muse_spark_debugmodel_ultradata_lora_sft(
+        data_parallel_shard_degree=1,
+        steps=120,
+    )
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_ultradata_lora_sft_perf_dp2() -> Trainer.Config:
+    """Row-5 throughput scale-out: checklist 8-card mesh, 120 steps."""
+    config = muse_spark_debugmodel_ultradata_lora_sft(
+        data_parallel_shard_degree=2,
+        steps=120,
+    )
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_ultradata_lora_sft_mem_1device() -> Trainer.Config:
+    """Row-5 single-device memory: all parallel degrees 1, no CP, 20 steps.
+
+    Do not go through ``with_cp``: that recipe applies Ulysses before the mesh
+    is rewritten, which is wrong for a 1-device bar.
+    """
+    config = muse_spark_debugmodel(
+        seq_len=32_768,
+        parallelism=ParallelismConfig(
+            data_parallel_replicate_degree=1,
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=1,
+            expert_parallel_degree=1,
+            pipeline_parallel_degree=1,
+            enable_sequence_parallel=False,
+        ),
+    )
+    _use_released_tokenizer_with_debug_model(config)
+    jsonl_pattern = os.environ.get(
+        "MUSE_SPARK_ULTRADATA_JSONL_PATTERN", _ULTRADATA_LOCAL_JSONL_PATTERN
+    )
+    config.dataloader = _ultradata_sft_dataloader(
+        IndexedJsonlSource.Config(patterns=(jsonl_pattern,))
+    )
+    config.optim = _ultradata_lora_sft_optim(warmup_steps=2)
+    config.training = TrainingConfig(
+        num_tokens_per_microbatch_per_dp_rank=32_768,
+        num_tokens_per_train_step=32_768,
+        max_context_length=32_768,
+        steps=20,
+        dtype="bfloat16",
+        mixed_precision_param="bfloat16",
+        mixed_precision_reduce="float32",
+        disable_cuda_graphs=True,
+    )
+    config.override.imports = []
     config.activation_remat = FullActivationRematConfig()
     config.model.local_compile_regions = ["loss"]
     config.debug.seed = 42

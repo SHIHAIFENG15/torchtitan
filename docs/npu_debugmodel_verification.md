@@ -1,6 +1,6 @@
 # Muse Spark debugmodel 验收
 
-对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。Glimmer 不跑。每一行把配置、验证要点的分析、跑通数据、这一行的验收指标放在一起。
+对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。每一行把配置、验证要点的分析、跑通数据、这一行的验收指标放在一起。
 
 机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。代码分支当前为 `npu-muse-spark-debug-r04`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 提交）。910B flex 两处 site-packages 补丁见 `docs/npu_910b_patches/`；Inductor / remat storage 走 `torchtitan-ascend` 的 patches，见 `docs/npu_pta_fixes.md`。
 
@@ -16,34 +16,13 @@
 
 没有同场景 GPU 基线时，不编造对比数。验收标准本身是四项：精度、性能、内存、确定性。下面写在对应行里，标准全文不另起一章重复。
 
-有 GPU 结果的行，达标与否写在该行的精度、性能、内存、确定性里，不另附逐项对照表。
+确定性只看 NPU 自己：同一配方、同一确定性开关连跑两次，loss 与 grad_norm 在日志打印位数上逐项相同即达标。不要求和 GPU 对齐。
 
-完整四项对齐结论见 `docs/npu_gpu_acceptance_report.md`（含第 4、5 行 GPU 补跑与六份 1000 步导出）。
+有 GPU 结果的行，精度、性能、内存的达标与否写在该行里，不另附逐项对照表。GPU 对照结论见 `docs/npu_gpu_acceptance_report.md`（含第 4、5 行 GPU 补跑与六份 1000 步导出）。
 
-GPU 机器上的环境、四项缺数和取数步骤写在 `docs/gpu_baseline_setup.md`。NPU 上的表不要改成 GPU 的数。
+GPU 机器上的环境、缺数和取数步骤写在 `docs/gpu_baseline_setup.md`。NPU 上的表不要改成 GPU 的数。
 
 ---
-
-## 2026-10-29 切到 release/0.4 之后的重跑
-
-`pytorch/torchtitan` 的 `release/0.4` 顶端仍是 v0.4.0（`45e33cd4`，2026-10-28）。本地分支 `npu-muse-spark-debug-r04` 就在这个点上，另有 6 个 NPU 提交，HEAD `d0f5101f`。旧验收跑在 `npu-muse-spark-debug`（`0861159b`，基线 `688704a6`）上。两棵树的 Muse Spark 模型不同：v0.4.0 默认打开 RoPE、RMSNorm、attention 编译区，`torch_remat` 为 0.2.2，flex attention 为 `fullgraph=True`。
-
-直接在新默认上跑 4 卡 `with_cp`（`with_cp_4card_r2.log`）会在第 1 步反向失败：`torch.utils.checkpoint.CheckpointError`，重算张量从 position 30 起和正向保存的错位，NPU 上的 `[245, 1]` float32 重算成 CPU 标量。debug 配方因此把 `local_compile_regions` 收回到旧的 `loss`、`fp32_to_bf16_split`（`torchtitan_recipes/tests/models/muse_spark.py`，尚未提交）。`debugmodel_mm` 会换掉 model config，同样收回。确定性重跑另加 `HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`（`debug.seed=42`，`debug.deterministic=True`）。卡是 0、2、3、6。1 号卡从约 15:12 CST 起被 `pytest test_nested_reduction.py` 占着，没有动它。
-
-### 四个配置的确定性
-
-判定只看 loss 和 grad_norm：同一配置、同一环境（`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`，seed 42）连续跑两次，10 步打印值逐项相同。tps 和第一步 memory 允许不同。四组都对上了。
-
-| 配置 | 网格 | 日志 | 结果 |
-| --- | --- | --- | --- |
-| 第 1 行 `muse_spark_debugmodel` | 4 卡 `dp_shard=2, tp=2, ep=2` | `det_debugmodel_r04_r1/r2.log` | 10 步 loss、grad_norm 相同，并与旧日志 `item2_logs/det_debugmodel_r1.log` 相同 |
-| 第 2 行① `muse_spark_debugmodel_with_cp` | 4 卡 `dp_shard=1, cp=2, tp=2, ep=2` | `det_with_cp_r04_r1/r2.log` | 10 步 loss、grad_norm 相同。旧分支没有跑完，没有旧数 |
-| 第 2 行② `muse_spark_debugmodel_fsdp2_cp2_ep4` | 4 卡 `dp_shard=2, cp=2, tp=1, ep=4` | `det_fsdp2_r04_r1/r2.log` | 10 步 loss、grad_norm 相同，并与旧日志 `item2_logs/det_fsdp2_r1.log` 相同 |
-| 第 2 行③ `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4` | 8 卡 `dp_shard=2, cp=2, tp=2, ep=4` | `det_mm_r04_r1/r2.log` | 10 步 loss、grad_norm 相同。旧多模态日志没有设 seed，不逐项比 |
-
-第 3 行 bf16 的两次对照在 2026-10-30，见下文第 3 行。mxfp8 没有样本。
-
-第 4 行 `muse_spark_debugmodel_mm` 的两次对照也在 2026-10-30，见下文第 4 行。网格是清单上的 EP2、Ulysses，不是第 2 行③的 EP4、AllGatherKV。
 
 ### 第 1 行
 
@@ -83,7 +62,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 | 9 | 5.17893 | 2.0813 |
 | 10 | 5.12831 | 1.8717 |
 
-稳定步 tps 大约 130–145。r1 第 1 步 memory 0.24GiB（编译），r2 第 1 步 0.08GiB，其后都是 0.10GiB。旧分支上这组没有跑完，没有旧数可对。
+稳定步 tps 大约 130–145。r1 第 1 步 memory 0.24GiB（编译），r2 第 1 步 0.08GiB，其后都是 0.10GiB。
 
 ### 第 2 行 ② FSDP2×CP2×EP4
 
@@ -110,13 +89,13 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 第 1、2、5、8 步 tps 掉到个位数，对应 flex attention 编译。第 6 步前有一条 `Sample length 633 > training max_context_length=512`，该样本被跳过。r1 稳定步 memory 0.26GiB；r2 稳定步 0.12GiB。loss 和 grad_norm 不受这个差别影响。
 
-精度。不达标。GPU 1000 步已导出（`docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`），step 0 未上 NPU，MAE 未算。这组 GPU 数不能填进第 4 行。
+精度。不达标。1000 步 loss MAE 0.03100，平均相对误差 16.82%。两条门槛都没过。grad_norm 相对误差 41.6%，不进精度门槛。数在 `docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`。这组数不能填第 4 行。
 
-性能。不达标。没有同配方 4 卡，也没有满 100 步。第 5、8 步 tps 掉下去是视觉长度重编译，GPU 同样掉到 15，不能当成线性度。
+性能。未测。没有同配方 4 卡，也没有满 100 步。第 5、8 步 tps 掉下去是视觉长度重编译，GPU 同样掉到 15，不能当成线性度。
 
-内存。不达标。单卡没跑。日志预留 NPU 稳定步一次 0.26GiB、一次 0.12GiB，GPU 约 0.14GiB。GPU 上 nvidia-smi 约 6.8GiB 是整卡占用，和日志预留不是同一个数。多模态的 `grid_sample` 反传在 GPU 上走了 CPU，loss 和内存都含这一层。
+内存。未测。单卡没跑。日志预留 NPU 稳定步一次 0.26GiB、一次 0.12GiB，GPU 约 0.14GiB。GPU 上 nvidia-smi 约 6.8GiB 是整卡占用，和日志预留不是同一个数。多模态的 `grid_sample` 反传在 GPU 上走了 CPU，loss 和内存都含这一层。
 
-确定性。NPU 两次达标，和 GPU 对齐不达标。loss 差有正有负，绝对值不超过 0.15，没有发散。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ## 第 1 行：基础 debugmodel 文本训练
 
@@ -195,20 +174,6 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 ### 跑通数据
 
-早先一趟没有开确定性（日志已不在磁盘上）。和下面确定性两次不是同一次随机种子。
-
-| step | loss | grad_norm |
-| --- | --- | --- |
-| 1 | 7.68154 | 4.7997 |
-| 2 | 6.79467 | 3.2132 |
-| 3 | 5.90877 | 2.2807 |
-| 4 | 5.55777 | 1.8885 |
-| 5 | 6.04875 | 1.7536 |
-| 6 | 5.41199 | 1.6882 |
-| 7 | 5.23373 | 1.6302 |
-| 8 | 5.41660 | 1.4989 |
-| 9 | 5.01979 | 1.7646 |
-| 10 | 4.99761 | 1.6373 |
 
 确定性两次，loss / grad_norm 在日志打印的位数上相同。模型参数初始化占用 0.01GiB。
 
@@ -229,13 +194,13 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 ### 本行验收指标
 
-精度。不达标。要同一份 step 0 权重，两边各跑不少于 1000 步，MoE 平均绝对误差不超过 0.02 或平均相对误差不超过 2%。GPU 1000 步在 `docs/gpu_baseline/debugmodel_1000.txt`；step 0 仍在 GPU 机，NPU 未加载，MAE 没算。10 步各自初始化不是这项。对齐总表见 `docs/npu_gpu_acceptance_report.md`。
+精度。达标。同一份 `outputs/checkpoint-debugmodel/step-0`，两边各 1000 步。loss MAE 0.03105，平均相对误差 1.28%（≤2%）。第 1 步 7.84031 / 7.84006。后 500 步相对误差 1.90%，差在变大但全段仍过线。曲线在 `docs/npu_baseline/debugmodel_1000.txt`。grad_norm 相对误差 7.56%，不进这项门槛。分析见 `docs/npu_gpu_acceptance_report.md`。
 
 性能。不达标（NPU、GPU 同配方对照已闭环）。NPU `perf_dp2` 稳定段平均 tps 322.89，`perf_dp4` 307.98，线性度 0.9538。GPU 同配方：`perf_dp2` 1003.27，`perf_dp4` 924.81，线性度 0.9218。与 NPU 差 |0.9538 − 0.9218| × 100 = 3.20 个百分点，超过 2 个百分点阈值，判定不达标。GPU 8 卡首轮日志疑似外部争卡退化已作废，采用重跑 `perf_dp4_gpu_r2.log`。命令、HEAD、日期与详表见 `docs/gpu_baseline_perf_mem.md` GPU 实测节。
 
 内存。达标（NPU、GPU 单卡与 4 卡对照已闭环）。NPU `mem_1device` 稳定预留 0.26GiB；4 卡稳定预留 0.11GiB。GPU 单卡 0.24GiB（step2–20）；4 卡 0.11GiB（`perf_dp2` step>100）。单卡差 0.02GiB，4 卡持平，判定达标。原始日志 `logs/mem_1device_gpu.log`、`logs/perf_dp2_gpu.log`。
 
-确定性。NPU 自己两次达标，和 GPU 对齐不达标。两边各自两次的 loss、grad_norm 都相同。两边互相比从第 1 步就不同，loss 差大约 0.07 到 0.13，没有随步数放大。标准要求同策略结果一致，所以这项不达标。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ---
 
@@ -252,12 +217,12 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 | 要点 | ① with_cp | ② fsdp2_cp2_ep4 | ③ mm_fsdp2… |
 | --- | --- | --- | --- |
-| 压缩 MoE 参数分片 | 代码已改成清单上的 4 卡网格。旧 8 卡跑法没走到 10 步 | 跑完。`dp_shard=2, cp=2, tp=1, ep=4` | 跑完。`dp_shard=2, cp=2, tp=2, ep=4` |
-| pooler/unpooler 重分布 | 旧 8 卡停在 `_StridedShard(dim=0) + Shard(dim=0)` 到 `Replicate` 的两次 all_gather | 10 步走完，没有单独打印 pooler 布局 | 同左 |
+| 压缩 MoE 参数分片 | 跑完。`dp_shard=1, cp=2, tp=2, ep=2`，4 卡 | 跑完。`dp_shard=2, cp=2, tp=1, ep=4` | 跑完。`dp_shard=2, cp=2, tp=2, ep=4` |
+| pooler/unpooler 重分布 | 10 步走完。布局：weight 在 dp/cp/tp 上都是 R，激活是序列并行 `(dp, cp, tp)` | 10 步走完。布局同上 | 同左 |
 | 多机 / 不均匀 token | 只有这一台机器。文本长度固定 512 | 同样是单机、定长 | 单机 8 卡。图、音频、视频每步长度不同，第 5、8 步为新长度重新编译 |
-| 序列切分布局一致性 | CP=2 的网格能建。旧 8 卡的切分 all_gather 没走完；无 TP 的对照跑完了，没有和另一份布局对过 | CP=2 的 10 步走完。没有和另一份布局对过 | 同左，外加视觉序列 |
-| 梯度累积延迟归约 | 配置为 accumulation steps 1，延迟归约没有被碰到 | 同左 | 同左 |
-| 滑窗 / 全局 NoPE | 无 TP 的对照跑完了 10 步，没有单独和 GPU 对语义。带 TP 的 4 卡重跑还没有 step loss | 两类层跟着 10 步跑了，没有单独和 GPU 对语义 | 同上，外加视觉 |
+| 序列切分布局一致性 | CP=2、TP=2 的 10 步走完。开序列并行时 token 轴是 `(dp, cp, tp)` | CP=2 的 10 步走完。开序列并行时 token 轴是 `(dp, cp, tp)`，关掉时是 `(dp, cp)`。bank index 的 token 轴与激活相同 | 同左，外加视觉序列 |
+| 梯度累积延迟归约 | `num_tokens_per_train_step=-1`，accumulation steps = 1，`fsdp_defer_gradient_reduction=False`。延迟归约进不去 | fsdp2 同样是 1 和 defer=False | debugmodel_mm 同样是 1 和 defer=False |
+| 滑窗 / 全局 NoPE | 层 3、7 全局 NoPE，其余窗宽 128，谓词见右栏 | 层 3、7 是全局 NoPE（`use_rope=False`，`window=None`），其余 `window=128` 且 `use_rope=True`。滑窗谓词是因果再加 `q-kv < window`。CPU 上 window=4、长度 10：位置 9 能看到 kv 6，看不到 kv 0；纯因果能看到 kv 0。这是两边共用的 mask，不是 logits 对拍 | 同上，外加视觉 |
 
 这三条的 tps 不能相除。网格、数据、有没有视觉编译都不一样，不能拿来算 8 卡 / 4 卡线性度。
 
@@ -266,25 +231,17 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 | 项 | 内容 |
 | --- | --- |
 | 清单 | 4 卡：TP2 × EP2 × CP2；Ulysses CP |
-| 代码原先 | 在基类 `dp_shard=2, tp=2, ep=2` 上再设 `cp=2`，世界大小 `2 × 2 × 2 = 8`，EP 不另加进程。和清单的 4 卡不一致 |
-| 代码修正 | 已改为 `dp_shard=1, tp=2, ep=2, cp=2, SP=True`，世界大小 4。`train_timeout_seconds=1800`；`override.imports=[]`（去掉 CUDA Helion/SwiGLU） |
+| 实际网格 | `dp_shard=1, tp=2, ep=2, cp=2, SP=True`，世界大小 4。`train_timeout_seconds=1800`；`override.imports=[]`（去掉 CUDA Helion/SwiGLU） |
 | CP 算法 | Ulysses（`_muse_spark_context_parallel_transform`） |
+| 结果 | 跑通。确定性两次：`det_with_cp_r04_r1/r2.log`，10 步 loss、grad_norm 逐项相同。数见表首「第 2 行 ①」 |
 
-旧 8 卡跑法没有跑完。2026-10-28 07:14 UTC 用 8 张卡启动（`NGPU=8 ./run_train.sh`，日志 `item2_logs/with_cp.log`）。进程起来后停在 `_StridedShard(dim=0) + Shard(dim=0)` 到 `Replicate` 的两次 all_gather，日志从 07:22 UTC 起不再增长。8 个 rank 的 AICore 一直是 0，CPU 在 HCCL 里空转。4 号卡当时被别人的 `rn50_grad_probe.py` 占满（AICore 99%，`ASCEND_RT_VISIBLE_DEVICES=4`，停在 inductor autotune）。这次任务没有跑完 10 步，已在约 08:25 UTC 停掉。0 号卡上还有别人的 `pytest test_perf.py`。随后在 2.3 上又启动过一次（`with_cp_rerun.log`），网格同样是 8 卡，flex attention 反向编译时 rank 5 SIGSEGV，其余 rank 被 SIGTERM。
+精度。达标。同一份 `outputs/checkpoint-with_cp/step-0`，两边各 1000 步。loss MAE 0.01900，平均相对误差 0.73%，两条都过。曲线在 `docs/npu_baseline/with_cp_1000.txt`。分析见 `docs/npu_gpu_acceptance_report.md`。
 
-对齐环境之后，旧 8 卡网格能进第 1 步，但 loss 有限、grad_norm 是 nan（`with_cp_2.2_r4.log`：`loss≈1.94, grad_norm=nan`）。对照诊断：去掉 TP 的 Ulysses 4 卡（`dp_shard=2, cp=2, tp=1`，`with_cp_no_tp_r1.log`）可以跑完，梯度有限。所以卡住和 nan 出在 TP 与 Ulysses CP 叠在一起的那条路径，不是 CP 本身建不了网格。
+性能。NPU 已测，待 GPU 同配方对照后才能判达标。配方 `muse_spark_debugmodel_with_cp_perf_dp1`（4 卡，`dp_shard=1, cp=2, tp=2, ep=2`，200 步）与 `muse_spark_debugmodel_with_cp_perf_dp2`（8 卡，只把 `dp_shard` 加到 2）。2026-11-02，`ENTRYPOINT=torchtitan_ascend.train`，`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`。step>100 平均 tps：4 卡 **148.53**，8 卡 **144.21**，线性度 **0.9709**。日志 `logs/with_cp_perf_dp1_npu.log`、`logs/with_cp_perf_dp2_npu.log`。
 
-按清单改成 4 卡之后：`with_cp_4card_r1.log` 在导入 `_MUSE_SPARK_HELION_ROPE_OVERRIDE` 时失败（`override.imports=[]` 之前的那次）。`with_cp_4card_r2.log` 已经打出 `dp_shard=1, cp=2, tp=2, ep=2` 并进入第 1 步，日志停在 inductor 编译，没有 step loss，也没有 `Training completed`。这一条还不能填 10 步表。
+内存。NPU 已测，待 GPU 同配方对照后才能判达标。单卡 `muse_spark_debugmodel_with_cp_mem_1device`（全并行度 1，无 CP）step 2–20 稳定预留 **0.25GiB**（`logs/with_cp_mem_1device_npu.log`）。4 卡 `with_cp_perf_dp1` 稳定预留 **0.10GiB**。
 
-上面是改网格之前的状态。清单上的 4 卡确定性结果如下。无 TP 的对照只说明 Ulysses 在 `tp=1` 时梯度有限，不能代替这条。
-
-精度。不达标。GPU 1000 步已导出（`docs/gpu_baseline/with_cp_1000.txt`），step 0 未上 NPU，MAE 未算。
-
-性能。不达标。没有同一配方的 8 卡，也没有满 100 步。稳定段大约 130 到 145 tps，不能算线性度。
-
-内存。不达标。单卡没跑。4 卡稳定预留 NPU 和 GPU 都是 0.10GiB，同量级，不够单卡对照。
-
-确定性。NPU 两次达标，和 GPU 对齐不达标。loss 差大约 0.03 到 0.12，没有放大。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ### ② `muse_spark_debugmodel_fsdp2_cp2_ep4`
 
@@ -308,13 +265,13 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 第 2 到第 10 步 tps：r1 平均 123，r2 平均 119。非数据并行规模是 CP×TP×PP=2，`512 / (123 × 2)` 约 2.1 秒一步，和日志时间间隔一致。第 1 步 loss 7.73262，离 `ln(2048)` 差 0.108。tflops 0.00，mfu 0.00%。比第 1 行慢，是因为 CP=2、TP=1，和第 1 行的 TP=2、CP=1 不是同一网格。
 
-精度。不达标。GPU 1000 步已导出（`docs/gpu_baseline/fsdp2_cp2_ep4_1000.txt`），step 0 未上 NPU，MAE 未算。
+精度。达标。1000 步 loss MAE 0.01422，平均相对误差 0.58%。grad_norm 相对误差 7.97%，不进精度门槛。数在 `docs/npu_baseline/fsdp2_cp2_ep4_mae.txt`。
 
-性能。不达标。稳定段约 123 tps。没有同一配方的 8 卡，也没有满 100 步。GPU 没测线性度。
+性能。未测。稳定段约 123 tps。没有同一配方的 8 卡，也没有满 100 步。GPU 没测线性度。
 
-内存。不达标。单卡没跑。稳定预留两边都是 0.12GiB，同量级，不够单卡对照。
+内存。未测。单卡没跑。稳定预留两边都是 0.12GiB，同量级，不够单卡对照。
 
-确定性。NPU 两次达标，和 GPU 对齐不达标。loss 差大约 0.04 到 0.12。第 10 步 grad_norm 差已经收到 0.003 以内，轨迹没有散开，但仍不是逐项相同。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ### ③ `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4`
 
@@ -373,15 +330,15 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 没有和一份参考 loss 对过。这次只说明 8 卡多模态 debugmodel 的 10 步训练循环能走完。
 
-这是没开确定性种子的旧跑，不拿来和 2026-10-30 的 GPU 基线比。开了种子的两次，四项结论在文首「第 2 行 ③」。
+这是没开确定性种子的旧跑，只说明 8 卡循环能走完。正式确定性两次见文首「第 2 行 ③」。
 
 精度。这趟没有 1000 步共享权重，不达标。第 1 步离 `ln(2048)` 差 0.037，只说明尺度。
 
-性能。不达标。稳定段约 39 tps，不能和第 1、2 行相除，也没有满 100 步。
+性能。未测。稳定段约 39 tps，不能和第 1、2 行相除，也没有满 100 步。
 
-内存。不达标。没有这趟的 GPU 预留，单卡没跑。稳定预留 0.24GiB。
+内存。未测。没有这趟的 GPU 预留，单卡没跑。稳定预留 0.24GiB。
 
-确定性。不达标。两趟都没开种子，loss 也不逐位相同。
+确定性。这趟两台机器都没开种子，不作确定性验收。正式两次见文首「第 2 行 ③」，已达标。
 
 #### 换机器复现这条 8 卡
 
@@ -473,13 +430,13 @@ NPU 路径在工作区，还没提交。干净检出跑不了这条。
 
 和第 1 行是同一网格、同一 seed。第 1 步 loss 7.68369，第 1 行是 7.68353。专家计算、重算保存区不同，padding 行也按现有 dispatcher 参与计算，不要求逐位相同。grad_norm 从 2.7578 到 1.6899，全程有限，没有变成 0。
 
-精度。不达标。A100 是 SM80，官方 Dist-MoE 和 mxfp8 要 SM100，没有可比的 1000 步基线。第 1 步离 `ln(2048)` 差 0.059，只说明 NPU 自己的尺度。
+精度。不可做。A100 是 SM80，官方 Dist-MoE 和 mxfp8 要 SM100，没有可比的 1000 步基线。第 1 步离 `ln(2048)` 差 0.059，只说明 NPU 自己的尺度。
 
-性能。不达标。稳定段约 355 tps。没有同配方 8 卡，也没有满 100 步。
+性能。不可做。稳定段约 355 tps。没有 GPU 同配方，也没有第二档卡数。
 
-内存。不达标。没有同场景 GPU 预留，单卡没跑。NPU 稳定预留 0.09GiB。
+内存。不可做。没有 GPU 预留，单卡没跑。NPU 稳定预留 0.09GiB。
 
-确定性。NPU 两次达标。没有 GPU 同策略结果，交叉对照不达标。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期就会调用 `dist_moe.BlockScaledConfig()`，包不在就建不起配置。`torchao` 也不在。`npu_grouped_matmul_swiglu_quant` 是 INT8，不是 MXFP8。压缩 MoE 的兼容性没有做到可跑的对照。
 
@@ -516,17 +473,17 @@ mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 
 | 要点 | 结果 |
 | --- | --- |
-| dataset_modalities 静态参与 | 10 步走完，图像、视频、音频按配方打包。没有打印每个模态是否每步都出现。超长样本被跳过 |
-| dummy 输入零值依赖 | 没有单独构造「无媒体」batch，也没有核对 dummy 是否为 0 |
-| bank indices 与 token 分片对齐 | 没有打印 bank index 和 token 分片。10 步 loss 有限只说明没有在这里崩溃 |
+| dataset_modalities 静态参与 | 静态集合是 `("vision", "audio")`，两个 encoder 都在。CPU 按配方抽 10 个 microbatch：图像 7/10、视频 5/10、音频 3/10，不是每步三种都在。缺的模态走 dummy。超长样本（519–581，上限 512）被跳过 |
+| dummy 输入零值依赖 | 构造了无 pixel、无 waveform 的 batch，走 `_prepare_multimodal_embeds`。dummy 视觉和 dummy 音频的绝对值和都是 0，加到 hidden 上的最大绝对差是 0。`build_dummy_*` 单独调用也是全 0；非零 bank 乘 0 之后 hidden 不变 |
+| bank indices 与 token 分片对齐 | 占位符上的 bank index 是切分前的绝对行号 0..n-1，其余为 -1。CP=2 切开后 rank0 为 `[-1,-1,0,1,2,-1,-1,-1]`，rank1 为 `[-1,-1,3,4,-1,-1,-1,-1]`，rank1 不从 0 重计。gather 把这些行写回占位符。run 数和 item token 数不一致会抛 `ValueError` |
 
-精度。不达标。GPU 10 步与 1000 步已齐（`docs/gpu_baseline/debugmodel_mm_1000.txt`）。step 0 还在 GPU 机，NPU 未加载，MAE 未算。10 步 loss 差约 −0.09 到 +0.11，不是 MAE。详见 `docs/npu_gpu_acceptance_report.md`。
+精度。不达标。1000 步 loss MAE 0.03067，平均相对误差 19.81%。两条门槛都没过。grad_norm 相对误差 67.5%，不进精度门槛。数在 `docs/npu_baseline/debugmodel_mm_mae.txt`。不要用第 2 行③的曲线填这里。
 
-性能。不达标。r1 稳定段约 120 tps，GPU 约 82–90。没有同配方 4 卡，也没有满 100 步。
+性能。未测。r1 稳定段约 120 tps，GPU 约 82–90。没有同配方 4 卡，也没有满 100 步。
 
-内存。不达标。单卡没跑。NPU 稳定预留 0.12GiB，GPU 约 0.10GiB，同量级不够单卡对照。
+内存。未测。单卡没跑。NPU 稳定预留 0.12GiB，GPU 约 0.10GiB，同量级不够单卡对照。
 
-确定性。NPU 两次达标，和 GPU 对齐不达标。两边各自两次相同；跨设备从第 1 步不同，差不发散。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ---
 
@@ -565,16 +522,16 @@ loss 停在 12.27 到 12.31，是因为词表宽度 202048，`ln(202048)` 约 12
 
 | 要点 | 结果 |
 | --- | --- |
-| assistant-only label masking | ChatProcessor 使用 `MuseSparkRenderer`，`current_date=2026-10-02`。标签来自 renderer 的 `loss_mask`，非监督位置写成 `IGNORE_INDEX`。第一条样本打进了日志，文本里有 system、user、assistant，日期是 2026-10-02。没有打印有效 label 的个数 |
+| assistant-only label masking | ChatProcessor 使用 `MuseSparkRenderer`，`current_date=2026-10-02`。标签来自 renderer 的 `loss_mask`，非监督位置写成 `IGNORE_INDEX`。第一条样本打进了日志，文本里有 system、user、assistant，日期是 2026-10-02。前 3 条 JSONL 的有效 label 分别是 4626、6512、5426，IGNORE_INDEX 分别是 24360、23828、22247。system、user、tool 的监督 token 都是 0；assistant 的 sampled 数是 4658、6534、5448，其中监督的是 4626、6512、5426。labels 与 `loss_mask` 右移一位一致 |
 | 真实 tokenizer | 加载了放到 `assets/hf/Muse-Spark-Open-816B-A42B/tokenizer.json` 的公开副本。id 到 201817。embedding 仍是 202048。不是测试用的 2048 词表 |
 | renderer | 第一条样本是 renderer 渲染结果，不是只拼用户原文 |
-| LoRA | 日志有 `LoRA training active with rank=8, alpha=16.0, target_modules=['output_gate', 'w13', 'w2', 'wo', 'wqkv']`。模型类名是 `FrozenMuseSparkModel`。AdamW 挂了 80 个参数张量。没有逐层量过哪些权重的梯度为 0 |
+| LoRA | 日志有 `LoRA training active with rank=8, alpha=16.0, target_modules=['output_gate', 'w13', 'w2', 'wo', 'wqkv']`。模型类名是 `FrozenMuseSparkModel`。AdamW 挂了 80 个参数张量。同一变换加在 debug 宽度上，CPU 逐层反传 40 个投影（24 个 Linear、16 个 GroupedLinear；CPU 上 flex 没有反向，所以不是整网一步）。基座 weight 梯度 40/40 为 0。lora_B 梯度 39/40 非 0。lora_A 梯度 28 个非 0、12 个为 0；这 12 个的 B 初值是全 0，A 被零矩阵挡住 |
 | 全量激活重算 | 日志有三次 `Applied FullActivationRematConfig`，分别是 8、3、2 个 transformer blocks，save patterns 和 recompute patterns 都是 none |
 
-精度。不达标。GPU 10 步与 1000 步已齐（`docs/gpu_baseline/ultradata_lora_1000.txt`）。step 0 未上 NPU，MAE 未算。10 步跨设备 |loss diff|≤0.027，不是 MAE。详见 `docs/npu_gpu_acceptance_report.md`。
+精度。达标。1000 步 loss MAE 0.000835，相对误差 0.0075%。step 0 在 `outputs/checkpoint-ultradata_lora/step-0`。11:26–18:26 UTC 跑完，退出码 0。曲线在 `docs/npu_baseline/ultradata_lora_1000.txt`。10 步 |loss diff|≤0.027 只是量级，正式数是这份 MAE。
 
-性能。不达标。稳定段 NPU 约 347 tps。没有另一档卡数，也没有满 100 步线性度。
+性能。未测。稳定段 NPU 约 347 tps。没有另一档卡数，也没有满 100 步线性度。
 
-内存。不达标。单卡没跑。NPU 稳定预留约 4.3GiB，GPU 日志约 3.46GiB。
+内存。未测。单卡没跑。NPU 稳定预留约 4.3GiB，GPU 日志约 3.46GiB。
 
-确定性。NPU 两次达标，和 GPU 对齐不达标。两边各自两次相同；跨设备差是各行里最小的，仍非逐项一致。INFO 日志里没有 `Dropping sample`。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。INFO 日志里没有 `Dropping sample`。

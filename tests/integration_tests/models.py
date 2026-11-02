@@ -591,6 +591,68 @@ def muse_spark_debugmodel_fsdp2_cp2_ep4() -> Trainer.Config:
     )
 
 
+def muse_spark_debugmodel_fsdp2_cp2_ep4_perf_dp2() -> Trainer.Config:
+    """Row-2② throughput baseline: same 4-card mesh, 200 steps."""
+    config = muse_spark_debugmodel_fsdp2_cp2_ep4()
+    config.training.steps = 200
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_fsdp2_cp2_ep4_perf_dp4() -> Trainer.Config:
+    """Row-2② throughput scale-out: only dp_shard doubled to 4 (8 cards)."""
+    from torchtitan_recipes.tests.models.muse_spark import muse_spark_debugmodel
+
+    config = muse_spark_debugmodel(
+        seq_len=512,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=4,
+            expert_parallel_degree=4,
+        ),
+    )
+    config.parallelism.context_parallel_degree = 2
+    config.override.imports = []
+    config.training.steps = 200
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    _set_spmd_typechecking(config, typechecking=True)
+    return apply_transforms(
+        config,
+        [
+            ContextParallelTransform(
+                inner_attention_map={
+                    FlexInnerAttention: AllGatherKVFlexInnerAttention,
+                    SlidingWindowFlexInnerAttention: (
+                        AllGatherKVSlidingWindowFlexInnerAttention
+                    ),
+                }
+            )
+        ],
+    )
+
+
+def muse_spark_debugmodel_fsdp2_cp2_ep4_mem_1device() -> Trainer.Config:
+    """Row-2② single-device memory: all parallel degrees 1, no CP."""
+    from torchtitan_recipes.tests.models.muse_spark import muse_spark_debugmodel
+
+    config = muse_spark_debugmodel(
+        seq_len=512,
+        parallelism=ParallelismConfig(
+            data_parallel_replicate_degree=1,
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=1,
+            expert_parallel_degree=1,
+            pipeline_parallel_degree=1,
+            enable_sequence_parallel=False,
+        ),
+    )
+    config.override.imports = []
+    config.training.steps = 20
+    _set_spmd_typechecking(config, typechecking=True)
+    return config
+
+
 def muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4() -> Trainer.Config:
     from torchtitan_recipes.tests.models.muse_spark import muse_spark_debugmodel_mm
 
@@ -615,6 +677,65 @@ def muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4() -> Trainer.Config:
     # On 910B that compile exceeds the default 100s training collective
     # timeout, and the ranks that finish first abort the all-gather.
     config.comm.train_timeout_seconds = 1800
+    _set_spmd_typechecking(config, typechecking=True)
+    return config
+
+
+def muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4_perf_dp1() -> Trainer.Config:
+    """Row-2③ throughput baseline: half DP (4 cards), 150 steps."""
+    from torchtitan_recipes.tests.models.muse_spark import muse_spark_debugmodel_mm
+
+    config = muse_spark_debugmodel_mm(
+        seq_len=512,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=2,
+            expert_parallel_degree=4,
+        ),
+        context_parallel_transform=ContextParallelTransform(
+            inner_attention_map={
+                FlexInnerAttention: AllGatherKVFlexInnerAttention,
+                SlidingWindowFlexInnerAttention: (
+                    AllGatherKVSlidingWindowFlexInnerAttention
+                ),
+            }
+        ),
+    )
+    config.override.imports = []
+    config.training.steps = 150
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    _set_spmd_typechecking(config, typechecking=True)
+    return config
+
+
+def muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4_perf_dp2() -> Trainer.Config:
+    """Row-2③ throughput scale-out: checklist 8-card mesh, 150 steps."""
+    config = muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4()
+    config.training.steps = 150
+    config.comm.train_timeout_seconds = 1800
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4_mem_1device() -> Trainer.Config:
+    """Row-2③ single-device memory: all parallel degrees 1, no CP."""
+    from torchtitan_recipes.tests.models.muse_spark import muse_spark_debugmodel_mm
+
+    config = muse_spark_debugmodel_mm(
+        seq_len=512,
+        parallelism=ParallelismConfig(
+            data_parallel_replicate_degree=1,
+            data_parallel_shard_degree=1,
+            tensor_parallel_degree=1,
+            expert_parallel_degree=1,
+            pipeline_parallel_degree=1,
+            enable_sequence_parallel=False,
+        ),
+        context_parallel_degree=1,
+    )
+    config.override.imports = []
+    config.training.steps = 20
     _set_spmd_typechecking(config, typechecking=True)
     return config
 
