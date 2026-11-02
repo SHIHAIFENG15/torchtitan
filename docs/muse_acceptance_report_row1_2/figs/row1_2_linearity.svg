@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420">
+<text x="480.0" y="28" text-anchor="middle" font-size="16" font-weight="bold">8卡/4卡 线性度（step&gt;100 稳定段）</text>
+<rect x="80" y="60" width="820" height="300" fill="#fafafa" stroke="#ccc"/>
+<line x1="80" y1="360.0" x2="900" y2="360.0" stroke="#eee"/>
+<text x="72" y="364.0" text-anchor="end" font-size="10">0.75</text>
+<line x1="80" y1="300.0" x2="900" y2="300.0" stroke="#eee"/>
+<text x="72" y="304.0" text-anchor="end" font-size="10">0.80</text>
+<line x1="80" y1="240.0" x2="900" y2="240.0" stroke="#eee"/>
+<text x="72" y="244.0" text-anchor="end" font-size="10">0.86</text>
+<line x1="80" y1="180.0" x2="900" y2="180.0" stroke="#eee"/>
+<text x="72" y="184.0" text-anchor="end" font-size="10">0.91</text>
+<line x1="80" y1="120.0" x2="900" y2="120.0" stroke="#eee"/>
+<text x="72" y="124.0" text-anchor="end" font-size="10">0.97</text>
+<line x1="80" y1="60.0" x2="900" y2="60.0" stroke="#eee"/>
+<text x="72" y="64.0" text-anchor="end" font-size="10">1.02</text>
+<rect x="121.1" y="133.5" width="57.4" height="226.5" fill="#ff7f0e"/>
+<text x="149.8" y="127.5" text-anchor="middle" font-size="10">0.9538</text>
+<rect x="186.5" y="169.1" width="57.4" height="190.9" fill="#1f77b4"/>
+<text x="215.2" y="163.1" text-anchor="middle" font-size="10">0.9218</text>
+<text x="182.5" y="380" text-anchor="middle" font-size="11">1 debugmodel</text>
+<rect x="326.1" y="114.5" width="57.4" height="245.5" fill="#ff7f0e"/>
+<text x="354.8" y="108.5" text-anchor="middle" font-size="10">0.9709</text>
+<text x="416.2" y="340.0" text-anchor="middle" font-size="10" fill="#888">GPU 待测</text>
+<text x="387.5" y="380" text-anchor="middle" font-size="11">2① with_cp</text>
+<rect x="531.1" y="131.5" width="57.4" height="228.5" fill="#ff7f0e"/>
+<text x="559.8" y="125.5" text-anchor="middle" font-size="10">0.9556</text>
+<text x="621.2" y="340.0" text-anchor="middle" font-size="10" fill="#888">GPU 待测</text>
+<text x="592.5" y="380" text-anchor="middle" font-size="11">2② fsdp2</text>
+<rect x="736.1" y="292.7" width="57.4" height="67.3" fill="#ff7f0e"/>
+<text x="764.8" y="286.7" text-anchor="middle" font-size="10">0.8106</text>
+<text x="826.2" y="340.0" text-anchor="middle" font-size="10" fill="#888">GPU 待测</text>
+<text x="797.5" y="380" text-anchor="middle" font-size="11">2③ mm_fsdp2</text>
+<text x="90" y="78" font-size="12" fill="#ff7f0e">NPU</text>
+<text x="140" y="78" font-size="12" fill="#1f77b4">GPU</text>
+<text x="80" y="408" font-size="11" fill="#555">判定：|NPU线性度−GPU线性度|×100 ≤ 2 个百分点。第 1 行差 3.20pp → 不达标；第 2 行待 GPU。</text>
+</svg>
