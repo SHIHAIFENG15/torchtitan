@@ -169,21 +169,37 @@ grad_norm 全段 MAE 0.046、相对误差 7.97%，不过线。不影响精度判
 
 ### 精度 — 不达标
 
-step 0：`outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`。GPU `docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`，NPU `docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`。2026-10-31 09:59–11:04 UTC 跑完，退出码 0。这组数不能填第 4 行。
+#### 精度原因分析
 
-| 窗口 | loss MAE | loss 平均相对误差 |
-| --- | --- | --- |
-| 1–1000 | 0.03100 | 16.82% |
-| 1–100 | 0.03596 | 2.73% |
-| 101–500 | 0.04964 | 12.41% |
-| 501–1000 | 0.01510 | 23.17% |
+正确跑法：加载同一份 `outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`，NPU / GPU 各 ≥1000 步；MoE 门槛为 MAE≤0.02 **或** MRE≤2%（全段平均）。曲线：`docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`、`docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`。摘要：`docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`。
 
-两条门槛都没过：MAE 0.031 大于 0.02，相对误差 16.82% 大于 2%。第 1 步 7.79217 / 7.78986，加载是对齐的。第 1000 步两边都掉到 0.00186 / 0.00340，绝对差很小。最大绝对差 0.270，在第 402 步。后 500 步 MAE 0.015 单独看能过绝对门槛，但全段平均过不了；后段相对误差被 GPU loss 掉到约 0.003 放大了。
+| 窗口 | loss MAE | loss MRE | 读法 |
+| --- | --- | --- | --- |
+| 1–1000 | 0.03100 | 16.82% | 全段：两条门槛都不过 |
+| 1–100 | 0.03596 | 2.73% | 前段相对误差已略超 2% |
+| 101–500 | 0.04964 | 12.41% | 中段绝对差最大档 |
+| 501–1000 | 0.01510 | 23.17% | MAE 单独可过 0.02，MRE 反而更高 |
 
-grad_norm 全段 MAE 0.648、相对误差 41.6%，最大绝对差 8.41 在第 396 步。不进精度判定。10 步各自初始化的差不是这项。
+**结论：不达标。**
 
-**对外口径（验收）：** 按 MoE 精度协议（MAE≤0.02 或 MRE≤2%，全段 1000 步平均），本行**不通过**。两端已加载同一 step 0（第 1 步 loss 对齐到 1e-3 量级）。不通过的主因是 debug 多模态过拟合后 loss 掉到 ~1e-3，相对误差被分母放大（全段 MRE 16.82%；后 500 步 MAE 可单独过 0.02 但 MRE 更高），不是权重未对齐或训练崩溃。本行曲线不得用于第 4 行。GPU 曲线复验任务见 `docs/gpu_agent_precision_reverify_todo.md`（复验可复现性，不改变本条门槛判定，除非复验暴露错权重/错配置）。
+排除「跑法/加载错误」：
 
+- 第 1 步 NPU 7.79217 / GPU 7.78986（差约 2.3e-3）。各自随机初始化的 10 步差是 0.03～0.15 量级，不是同一回事。
+- 训练日志有 `Loading the checkpoint from .../checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`。退出码 0；loss / grad_norm 全程有限。
+
+主因（按正确 1000 步曲线）：
+
+1. debug 多模态尺度下两端都过拟合：第 1000 步 NPU ≈0.00186、GPU ≈0.00340。绝对差很小，但分母到 1e-3 后，MRE 被放大。
+2. 后 500 步最能说明问题：MAE 0.015 单独能过绝对门槛，MRE 23.17%——「绝对更近、相对更差」，是小 loss 分母效应，不是前 100 步把全段平均拉爆。
+3. 最大绝对差 0.270 约在第 402 步，与视觉打包长度变化、flex 重编译步重合。两边都会出现编译步 tps 掉到个位数，不能单独当成 NPU 算子故障。
+4. GPU 路径上 `grid_sample` 反传曾走 CPU，数值栈与 NPU 不完全同构，会贡献一部分设备差；即便忽略这一层，按现门槛 MRE 仍难进 2%。
+
+边界：
+
+- 本行曲线**不得**填第 4 行 `muse_spark_debugmodel_mm`（另一套配置）。
+- 同 step-0 的 GPU 曲线复验见 `docs/gpu_agent_precision_reverify_todo.md`，用于确认可复现；按现门槛预期仍不达标。若只改判定窗口或标准，那是改口径，不是重验自动翻盘。
+
+`grad_norm` 全段 MAE 0.648、MRE 41.6%，不进入精度门槛。
 
 ### 性能 — 未测
 
@@ -215,21 +231,18 @@ A100 是 SM80。官方 Dist-MoE / mxfp8 要 SM100，没有 GPU 1000 步，也没
 
 ### 精度 — 不达标
 
-step 0：`outputs/checkpoint-debugmodel_mm/step-0`。GPU `docs/gpu_baseline/debugmodel_mm_1000.txt`，NPU `docs/npu_baseline/debugmodel_mm_1000.txt`。2026-10-31 11:04–11:26 UTC 跑完，退出码 0。不要用第 2 行③的曲线填这里。
+#### 精度原因分析
 
-| 窗口 | loss MAE | loss 平均相对误差 |
+正确跑法：加载同一份 `outputs/checkpoint-debugmodel_mm/step-0`，各 ≥1000 步；门槛同上。曲线：`docs/npu_baseline/debugmodel_mm_1000.txt`、`docs/gpu_baseline/debugmodel_mm_1000.txt`。摘要：`docs/npu_baseline/debugmodel_mm_mae.txt`。
+
+| 窗口 | loss MAE | loss MRE |
 | --- | --- | --- |
 | 1–1000 | 0.03067 | 19.81% |
 | 1–100 | 0.03704 | 2.64% |
 | 101–500 | 0.04971 | 13.94% |
 | 501–1000 | 0.01417 | 27.95% |
 
-两条门槛都没过：MAE 0.031 大于 0.02，相对误差 19.81% 大于 2%。第 1 步 7.79205 / 7.79068。第 1000 步 0.00604 / 0.00211。最大绝对差 0.272，在第 187 步。后 500 步 MAE 0.014 单独看能过绝对门槛，全段平均过不了；后段相对误差被 GPU loss 掉到约 0.002 放大了。
-
-grad_norm 全段 MAE 0.665、相对误差 67.5%，最大绝对差 12.87 在第 443 步。不进精度判定。10 步各自初始化的差不是这项。
-
-**对外口径（验收）：** 按 MoE 精度协议本行**不通过**（MAE 0.031 / MRE 19.81%）。机制与第 2③ 同类（debug 多模态过拟合导致相对误差放大）；曲线不得与第 2③ 混用。GPU 复验任务见 `docs/gpu_agent_precision_reverify_todo.md`。
-
+**结论：不达标。** 第 1 步 7.79205 / 7.79068，权重已对齐。第 1000 步两端 loss 到 ~1e-3；后 500 步 MAE 0.014 可单独过绝对门槛，但 MRE 27.95%。机制与第 2 行③相同：debug 多模态过拟合后相对误差被分母放大。**不得与第 2 行③曲线混用。** GPU 复验见 `docs/gpu_agent_precision_reverify_todo.md`。`grad_norm` MAE 0.665 / MRE 67.5% 不进精度门槛。
 
 ### 性能 — 未测
 

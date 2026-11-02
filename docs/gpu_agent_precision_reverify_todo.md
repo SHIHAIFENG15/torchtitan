@@ -2,7 +2,7 @@
 
 给 `node-5-15`（或同等 8×A100）上的另一个 agent。
 
-目的：对**精度已判定不通过 / 易被挑战**的配置，用**同一份 step 0**再跑一遍 GPU 1000 步，确认基线可复现，而不是另建权重。队内根因分析见 `docs/npu_debugmodel_verification.md`；对外口径见 `docs/npu_gpu_acceptance_report.md`。
+目的：对**精度已判定不通过 / 易被挑战**的配置，用**同一份 step 0**再跑一遍 GPU 1000 步，确认基线可复现，而不是另建权重。原因分析见 `docs/npu_debugmodel_verification.md` 与 `docs/npu_gpu_acceptance_report.md` 中该配置的精度小节。
 
 分支：先 `git pull` 到含本文件的 `npu-muse-spark-debug-r04`。
 
@@ -111,4 +111,4 @@ export 到 `docs/gpu_baseline/debugmodel_mm_1000_r2.txt`，`--baseline-ngpus=8`�
 是否误建新 seed（训练日志有无 Loading .../step-0）:
 ```
 
-完成后：更新 `docs/gpu_baseline/`（仅新增 r2 文件）、本文件交数节、`docs/npu_gpu_acceptance_report.md` 对应精度小节加一句「GPU 曲线已复验」，以及 `docs/npu_debugmodel_verification.md` 队内分析补一行复验数。
+完成后：更新 `docs/gpu_baseline/`（仅新增 r2 文件）、本文件交数节、`docs/npu_gpu_acceptance_report.md` 对应精度小节加一句「GPU 曲线已复验」，以及 `docs/npu_debugmodel_verification.md` 对应配置的精度小节补一行复验数。

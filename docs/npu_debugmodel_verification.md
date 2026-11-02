@@ -70,9 +70,9 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 ### 第 2 行 ③ 8 卡多模态
 
-`muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4`，网格 `dp_shard=2, cp=2, tp=2, ep=4`，8 卡。1 号卡上的 `pytest test_nested_reduction.py`（pid 203951）没有停，8 卡任务和它叠在同一张卡上跑。pytest 在训练结束之后仍在。
+`muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4`，网格 `dp_shard=2, cp=2, tp=2, ep=4`，8 卡。
 
-`det_mm_r04_r1.log`：17:50 CST 进入第 1 步，17:55 `Training completed`。`det_mm_r04_r2.log`：18:13 CST 进入第 1 步，18:14 `Training completed`。两次都开了 `HCCL_DETERMINISTIC=true` 和 `MUSE_DEBUG_DETERMINISTIC=1`。10 步 loss、grad_norm 逐项相同，下表两趟共用。r2 的 memory 更低（第 1 步 0.07GiB，其后 0.12GiB），因为编译缓存已经热了；tps 也不相同。旧的多模态日志没有设 seed，不和这次逐项比。
+确定性正确跑法：`det_mm_r04_r1.log` / `det_mm_r04_r2.log`，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`。两次 10 步 loss、grad_norm 逐项相同，下表两趟共用。r2 memory 更低（编译缓存已热）；tps 两次不必相同。旧的无种子多模态日志不和这次逐项比。
 
 | step | loss | grad_norm | memory | tps |
 | --- | --- | --- | --- | --- |
@@ -87,34 +87,8 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 | 9 | 3.95203 | 2.8241 | 0.26GiB | 37 |
 | 10 | 4.55447 | 2.8045 | 0.26GiB | 38 |
 
-第 1、2、5、8 步 tps 掉到个位数，对应 flex attention 编译。第 6 步前有一条 `Sample length 633 > training max_context_length=512`，该样本被跳过。r1 稳定步 memory 0.26GiB；r2 稳定步 0.12GiB。loss 和 grad_norm 不受这个差别影响。
+第 1、2、5、8 步 tps 掉到个位数，对应 flex attention 编译。精度 / 性能 / 内存的验收结论与原因分析见下文「第 2 行 / ③」（以共享 step 0 的 1000 步与 perf/mem 配置为准）。
 
-精度。不达标。1000 步 loss MAE 0.03100，平均相对误差 16.82%。两条门槛都没过。grad_norm 相对误差 41.6%，不进精度门槛。数在 `docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`。这组数不能填第 4 行。
-
-#### 精度不达标：队内根因分析（对外摘要见验收报告）
-
-协议：同一 step 0，≥1000 步，MoE 满足 MAE≤0.02 **或** MRE≤2% 即过。本行两条都不过：MAE **0.03100**，MRE **16.82%**（`docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`）。
-
-**不是「没加载上权重」。** 第 1 步 NPU 7.79217 / GPU 7.78986，差约 2.3e-3，与各自随机初始化的 10 步差（0.03～0.15）不是同一量级。日志有 `Loading the checkpoint from .../checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`。
-
-**主因是 debug 多模态尺度下的过拟合 + 相对误差分母塌缩，不是训练中途炸了。**
-
-1. 两端 loss 都从 ~7.79 掉到第 1000 步的 ~0.0019 / ~0.0034。绝对差在后段往往很小，但 GPU loss≈3e-3 时，同样 1e-4 量级的绝对差会被 MRE 放成很大的相对误差。
-2. 分窗口：1–100 MRE 2.73%；101–500 12.41%；**501–1000 的 MAE 0.015 单独能过绝对门槛，但 MRE 23.17%**——说明后半段「绝对更近、相对更差」，典型的小 loss 分母效应，不是前 100 步把全段平均拉爆。
-3. 最大绝对差 0.270 在约第 402 步（中段），与视觉/打包长度变化、flex 重编译步重合；两边都会在部分步把 tps 打到个位数，属同一类编译抖动，不能单独当成 NPU 算子错误证据。
-4. GPU 路径上 `grid_sample` 反传曾走 CPU，多模态数值栈与 NPU 不完全同构；这会贡献设备差，但**即使抹平到只剩过拟合放大，MRE 仍很难靠「再跑一轮」掉进 2%**。
-5. **不要填第 4 行。** 第 4 行 `debugmodel_mm` 是另一套配置/曲线（MAE 0.031 / MRE 19.8%），机制同类，数不能混用。
-
-**和「再跑能否翻盘」。** GPU 侧按 `docs/gpu_agent_precision_reverify_todo.md` 用**同一 step 0**复验曲线，目的是证明基线可复现、排除偶发争卡/错权重；**预期仍不达标**。若要改结论，只能改验收窗口/标准（例如只看绝对误差或截断过拟合段），那是口径变更，不是重验失败变成功。
-
-grad_norm 全段 MAE 0.648、MRE 41.6%，不进精度门槛。
-
-
-性能。NPU 已测，待 GPU。见第 2 行③正文：`mm_fsdp2_perf_dp1/dp2` 线性度 **0.8106**。
-
-内存。NPU 已测，待 GPU。单卡 **0.28GiB**，4 卡稳定 **0.15GiB**。nvidia-smi 整卡占用不进这项。
-
-确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 ## 第 1 行：基础 debugmodel 文本训练
 
@@ -296,122 +270,65 @@ grad_norm 全段 MAE 0.648、MRE 41.6%，不进精度门槛。
 
 | 项 | 内容 |
 | --- | --- |
-| 网格 | `pp=1, dp_replicate=1, dp_shard=2, cp=2, tp=2, ep=4`，8 卡。`2 × 2 × 2 = 8`，EP 从这 8 个进程里分专家，不另加进程。序列并行跟着 TP |
-| CP | AllGatherKV |
-| 模型 | 文本 dim 256、8 层、8 专家、词表 2048、序列 512、10 步。视觉是 NaViT，head_dim 16 |
-| 数据 | `tests/assets/cc12m_test/cc12m-train-0000.tar`，加合成音频、视频。每 DP rank 512 token、每步 1024 token |
-| 超时 | 启动用的 `init_timeout_seconds` 保持 300。第 1 步之后这条配置自己把 `train_timeout_seconds` 设为 1800。日志是 `Synchronizing and adjusting timeout for all ProcessGroups to 0:30:00` |
-| 结果 | **2.3** 跑通：`item2_logs/mm_r12.log`，2026-10-28 11:02–11:07 UTC，`Training completed`，`Process group destroyed`，没有 `ChildFailedError`。**2.2** 对齐后复验：`mm_2.2_8card.log`，2026-10-29。两趟都没有开确定性种子 |
+| 网格 | `dp_shard=2, cp=2, tp=2, ep=4`，8 卡；CP 为 AllGatherKV |
+| 模型 / 数据 | debug 尺度多模态（文本 + CC12M 图 + 合成音视频）；seq 512；配置内 `train_timeout_seconds=1800` |
+| 确定性（正确跑法） | `HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`；`det_mm_r04_r1/r2.log` 两次 10 步 loss、grad_norm 逐项相同，表见文首「第 2 行 ③」 |
+| 精度（正确跑法） | 同一 `outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`，两边各 1000 步；NPU 入口 `torchtitan_ascend.train` |
 
-2.3（`mm_r12.log`）：
+使能本配置所需的 910B flex / remat / timeout 等改动见 `docs/npu_pta_fixes.md` 与 `docs/npu_910b_patches/`。早期无种子 10 步只证明循环能跑通，**不作为**精度或确定性验收数。
 
-| step | loss | grad_norm | memory | tps | tflops | mfu |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | 7.66202 | 9.4633 | 0.07GiB (0.24%) | 3 | 0.00 | 0.00% |
-| 2 | 6.83399 | 6.2513 | 0.12GiB (0.42%) | 15 | 0.00 | 0.00% |
-| 3 | 5.79272 | 4.1767 | 0.12GiB (0.42%) | 40 | 0.00 | 0.00% |
-| 4 | 6.22080 | 5.1368 | 0.12GiB (0.42%) | 41 | 0.00 | 0.00% |
-| 5 | 4.33259 | 4.8085 | 0.24GiB (0.81%) | 2 | 0.00 | 0.00% |
-| 6 | 5.80127 | 3.5880 | 0.24GiB (0.81%) | 37 | 0.00 | 0.00% |
-| 7 | 5.17229 | 2.9730 | 0.24GiB (0.81%) | 39 | 0.00 | 0.00% |
-| 8 | 3.40500 | 2.9641 | 0.24GiB (0.81%) | 1 | 0.00 | 0.00% |
-| 9 | 3.98423 | 2.8151 | 0.24GiB (0.81%) | 38 | 0.00 | 0.00% |
-| 10 | 4.68848 | 3.0236 | 0.24GiB (0.81%) | 39 | 0.00 | 0.00% |
+#### 精度原因分析
 
-去掉第 1、5、8 步（编译把 tps 打到 3、2、1），剩下 6 步 tps 平均 39。非数据并行规模是 4，`512 / (39 × 4)` 约 3.3 秒，和这 6 步的日志间隔一致。第 5 步和第 8 步 tps 掉到个位数，是新的视觉 token 长度在重新编译 flex attention，不是算子挂住。第 1 步 7.66202，和 `ln(2048)` 差 0.037，尺度仍像平均交叉熵。后面有降有升，打包的图、音频、视频每步长度不同，不能单独当成和参考实现对上了。`checkpointer` 是空的，没有存权重，参数差没有直接量。10 步 grad_norm 都是有限值，没有变成 0。
+正确跑法：加载同一份 `outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`，NPU / GPU 各 ≥1000 步；MoE 门槛为 MAE≤0.02 **或** MRE≤2%（全段平均）。曲线：`docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`、`docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000.txt`。摘要：`docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`。
 
-2.2 对齐复验。2 号卡上当时有别人的 `runner_warmup.py`，约占 7GB，没有停它，8 卡任务仍然跑完。03:25–04:02 UTC，`Training completed`。loss 和 2.3 不是逐位相同，因为两边都没有设 `debug.seed`，也没有开 `debug.deterministic`。
+| 窗口 | loss MAE | loss MRE | 读法 |
+| --- | --- | --- | --- |
+| 1–1000 | 0.03100 | 16.82% | 全段：两条门槛都不过 |
+| 1–100 | 0.03596 | 2.73% | 前段相对误差已略超 2% |
+| 101–500 | 0.04964 | 12.41% | 中段绝对差最大档 |
+| 501–1000 | 0.01510 | 23.17% | MAE 单独可过 0.02，MRE 反而更高 |
 
-| step | loss | grad_norm | memory | tps |
-| --- | --- | --- | --- | --- |
-| 1 | 7.85128 | 9.7895 | 0.23GiB (0.77%) | 0 |
-| 2 | 6.88970 | 6.3927 | 0.26GiB (0.89%) | 0 |
-| 3 | 5.88565 | 4.4378 | 0.26GiB (0.89%) | 38 |
-| 4 | 6.15249 | 5.1606 | 0.26GiB (0.89%) | 39 |
-| 5 | 4.45755 | 4.7667 | 0.26GiB (0.89%) | 1 |
-| 6 | 5.80792 | 3.5132 | 0.26GiB (0.89%) | 34 |
-| 7 | 5.12224 | 2.8415 | 0.26GiB (0.89%) | 39 |
-| 8 | 3.47310 | 3.1467 | 0.26GiB (0.89%) | 1 |
-| 9 | 4.01132 | 2.8866 | 0.26GiB (0.89%) | 39 |
-| 10 | 4.63377 | 2.8766 | 0.26GiB (0.89%) | 38 |
+**结论：不达标。**
 
-第 1 步 loss 7.85128，离 `ln(2048)` 差 0.227。去掉第 1、2、5、8 步，稳定段 tps 平均 38，和 2.3 的 39 同一档。
+排除「跑法/加载错误」：
 
-这次能跑完，靠的是下面几处改动，细节在 `docs/npu_pta_fixes.md`：
+- 第 1 步 NPU 7.79217 / GPU 7.78986（差约 2.3e-3）。各自随机初始化的 10 步差是 0.03～0.15 量级，不是同一回事。
+- 训练日志有 `Loading the checkpoint from .../checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`。退出码 0；loss / grad_norm 全程有限。
 
-- 视觉 RoPE 的 complex64 下标不走 `rope.py` 那一处，910B 的 index 没有 complex64。
-- `torch_remat` 在 NPU 上不再用空指针 storage 做占位张量。空指针在反向重算里会段错误。
-- 8 个 rank 一起给 flex attention 反向选块时，会有一个 rank 段错误。选块改成跨进程串行。
-- 非 Ascend 950 不用 flex decoding。短视觉序列会另编一套核，编译时间超过原来的 100 秒训练超时，先跑完的 rank 把 all-gather 拖超时，HCCL watchdog 以 SIGABRT 退出。
-- 这条配置的 `train_timeout_seconds` 设为 1800，盖住第 5 步、第 8 步那种新长度编译。
-- 单帧 `torch.cat` 得到的是原张量。视觉编码器返回前做了 `contiguous()`，避免 FSDP 把输出当成 view 丢掉 pre-backward all-gather。
-- loss 在编译期跳过 `_assert_async`。910B 的 inductor 给这个 0 维 device assert 做代码生成时会挂住。
+主因（按正确 1000 步曲线）：
 
-没有和一份参考 loss 对过。这次只说明 8 卡多模态 debugmodel 的 10 步训练循环能走完。
+1. debug 多模态尺度下两端都过拟合：第 1000 步 NPU ≈0.00186、GPU ≈0.00340。绝对差很小，但分母到 1e-3 后，MRE 被放大。
+2. 后 500 步最能说明问题：MAE 0.015 单独能过绝对门槛，MRE 23.17%——「绝对更近、相对更差」，是小 loss 分母效应，不是前 100 步把全段平均拉爆。
+3. 最大绝对差 0.270 约在第 402 步，与视觉打包长度变化、flex 重编译步重合。两边都会出现编译步 tps 掉到个位数，不能单独当成 NPU 算子故障。
+4. GPU 路径上 `grid_sample` 反传曾走 CPU，数值栈与 NPU 不完全同构，会贡献一部分设备差；即便忽略这一层，按现门槛 MRE 仍难进 2%。
 
-这是没开确定性种子的旧跑，只说明 8 卡循环能走完。正式确定性两次见文首「第 2 行 ③」。
+边界：
 
-精度。这趟（无种子 10 步）没有 1000 步共享权重，不能当精度项。开种子的 1000 步正式结论见文首「第 2 行 ③」队内根因分析与 `docs/npu_gpu_acceptance_report.md` 对外口径（不达标）。
+- 本行曲线**不得**填第 4 行 `muse_spark_debugmodel_mm`（另一套配置）。
+- 同 step-0 的 GPU 曲线复验见 `docs/gpu_agent_precision_reverify_todo.md`，用于确认可复现；按现门槛预期仍不达标。若只改判定窗口或标准，那是改口径，不是重验自动翻盘。
 
-性能。NPU 已测，待 GPU。`mm_fsdp2_perf_dp1` / `perf_dp2`：step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。日志 `logs/mm_fsdp2_perf_dp1_npu.log`、`logs/mm_fsdp2_perf_dp2_npu.log`。
+`grad_norm` 全段 MAE 0.648、MRE 41.6%，不进入精度门槛。
 
-内存。NPU 已测，待 GPU。单卡 `mm_fsdp2_mem_1device` **0.28GiB**；4 卡稳定 **0.15GiB**。
+性能。NPU 已测，待 GPU。`mm_fsdp2_perf_dp1` / `perf_dp2`：step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。日志 `logs/mm_fsdp2_perf_dp1_npu.log`、`logs/mm_fsdp2_perf_dp2_npu.log`。视觉长度变化触发的 flex 重编译会把部分步 tps 打到个位数，记数仍按 step>100 全平均。
 
-确定性。这趟两台机器都没开种子，不作确定性验收。正式两次见文首「第 2 行 ③」，已达标。
+内存。NPU 已测，待 GPU。单卡 `mm_fsdp2_mem_1device` **0.28GiB**；4 卡稳定 **0.15GiB**。只比日志 `memory`。
 
-#### 换机器复现这条 8 卡
+确定性。达标（见文首正确跑法两次）。跨设备打印值不要求一致。
 
-只拉分支不够。8 卡能跑完，还靠装在 site-packages 里的 flex 补丁，它们不在 git 里。换机器时先装同一份 wheel 和 `torch_remat==0.2.2`，再打上 `docs/npu_910b_patches/`，remat storage 用 torchtitan-ascend。本机路径前缀是 `/home/npu-work/npu-y00839695-torchtitan-20261028/`，容器里是 `/workspace/`。
+#### 环境与启动
 
-| 文件 | md5 | 盖住之后的行为 |
-| --- | --- | --- |
-| `torch_npu/_inductor/kernel/flex_attention.py` | `659bf1dbc6c9652d8a5fdf9dad9bedeb` | 非 950 不用 mask-out，反向分块默认 16；`_use_flex_decoding` 在非 950 上返回 false |
-| `torch_npu/_inductor/runtime/triton_heuristics.py` | `e0fcd810ba31c602be44fb7c5e49b058` | 非 950 不为 `simd_simt_mix` 生成 `simt_only`；名字里带 `flex_attention` 的 autotune 用 `fcntl` 锁 `/tmp/npu_flex_attention_autotune.lock` |
-
-和 8 卡有关的提交，按当时尖端 `0861159b` 往前看：`49cbb4d3` 处理 `rope.py` 的 complex64 下标，并把非 CUDA 的 SwiGLU 改成 `silu(gate) * up`；`986e693c` 在 Dist-MoE 导入失败时跳过，并探测 FSDP `MixedPrecisionPolicy`；`16db70a0` 处理视觉 RoPE 的 complex64 下标、loss 里编译期跳过 `_assert_async`、视觉输出 `contiguous()`、这条配置的 `train_timeout_seconds=1800`；`0861159b` 把启动用的 `init_timeout_seconds` 保持在 300，1800 只写在配置里。当前分支名是 `npu-muse-spark-debug-r04`，基于 `release/0.4`。2.2 复验时分支从 `38347913` 对齐到 `0861159b`，flex 两份文件 md5 与上表相同；remat storage 改走 torchtitan-ascend。
-
-环境（训练在容器里，不在宿主机的 Python 里）：
-
-| 项 | 本机 |
-| --- | --- |
-| 镜像 | `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12-devel` |
-| 容器系统 | Ubuntu 22.04.5，Python 3.12.15。宿主机是 openEuler 22.03 aarch64，没有这份能用的 venv |
-| CANN | 9.2.0，`/usr/local/Ascend/cann-9.2.0` |
-| 驱动 / 固件 | 26.1.1 / 7.8.0.6.201 |
-| 卡 | 8 × Ascend 910B4，单卡 HBM 32768MB。日志里的容量是 29.49GiB |
-| torch | `2.15.0+cpu` |
-| torch_npu | `2.15.0.dev20261005+git14dc54e`，wheel 在 `/mnt/wheels/`，安装时 `--no-deps` |
-| torchvision | `0.30.0.dev20261007+cpu` |
-| triton | 3.6.0（带 CANN 扩展，没有单独的 `triton_ascend` 包） |
-| numpy | 1.26.4 |
-| torch_remat | 0.2.2 |
-| torchtitan | 目录里 `pip install -e .` |
-
-启动前在容器里做和 `env.sh` 一样的事：
-
-```bash
-grep -q "$(hostname)" /etc/hosts || echo "127.0.0.1 $(hostname)" >> /etc/hosts
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-source /path/to/.venv/bin/activate
-export TORCH_DEVICE_BACKEND_AUTOLOAD=1
-export TORCHINDUCTOR_COMPILE_THREADS=1
-export TORCHNPU_PRECOMPILE_THREADS=1
-cd /path/to/torchtitan
-```
-
-`TORCHINDUCTOR_COMPILE_THREADS` 和 `TORCHNPU_PRECOMPILE_THREADS` 都要是 1。910B4 上编译进程池和 flex attention 反向的并行选块会段错误。8 张卡都要空着。`NGPU=8` 会用 0 到 7。有卡被占时，用 `ASCEND_RT_VISIBLE_DEVICES` 挑 8 张空卡，再设 `NGPU=8`。
-
-数据在仓库里：`tests/assets/tokenizer/tokenizer.json`，`tests/assets/cc12m_test/cc12m-train-0000.tar`。视频和音频是配置里的合成数据，不用另下。
+使能与补丁见 `docs/npu_pta_fixes.md`、`docs/npu_910b_patches/`。容器内：
 
 ```bash
 source /workspace/env.sh
+export TORCHINDUCTOR_COMPILE_THREADS=1
+export TORCHNPU_PRECOMPILE_THREADS=1
 NGPU=8 MODULE=tests.integration_tests.models \
   CONFIG=muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4 ./run_train.sh
 ```
 
-网格应打出 `pp=1, dp_replicate=1, dp_shard=2, cp=2, tp=2, ep=4`。第 1 步之后应出现 `Synchronizing and adjusting timeout for all ProcessGroups to 0:30:00`。启动超时仍是 300 秒。跑完的标志是 rank 0 打出 `step: 10`，然后 `Training completed` 和 `Process group destroyed`。`LOG_RANK` 默认 0，日志里只有 rank 0。第 5 步和第 8 步 tps 会掉到个位数，那是新的视觉长度在编译，等它编完即可。
+网格应打出 `dp_shard=2, cp=2, tp=2, ep=4`。验收用确定性两次与共享 step0 的 1000 步，不用无种子旧日志。
 
----
 
 ## 第 3 行：Dist-MoE 融合
 
@@ -498,9 +415,9 @@ mxfp8 配置没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 
 精度。不达标。1000 步 loss MAE 0.03067，平均相对误差 19.81%。两条门槛都没过。grad_norm 相对误差 67.5%，不进精度门槛。数在 `docs/npu_baseline/debugmodel_mm_mae.txt`。不要用第 2 行③的曲线填这里。
 
-#### 精度不达标：队内根因（与第 2③ 同类）
+#### 精度不达标：精度原因分析
 
-MAE **0.03067**，MRE **19.81%**（`docs/npu_baseline/debugmodel_mm_mae.txt`）。第 1 步已对齐加载。第 1000 步两端 loss ~1e-3 量级；后段 MRE 被小分母放大。机制与第 2③ 相同（debug 多模态过拟合），**不要用 2③ 曲线填本行，也不要用本行填 2③**。GPU 复验见 `docs/gpu_agent_precision_reverify_todo.md` 任务 B。对外口径：协议下不通过；属 debug 尺度过拟合导致的相对误差放大，非未加载权重。
+MAE **0.03067**，MRE **19.81%**（`docs/npu_baseline/debugmodel_mm_mae.txt`）。第 1 步已对齐加载。第 1000 步两端 loss ~1e-3 量级；后段 MRE 被小分母放大。机制与第 2③ 相同（debug 多模态过拟合），**不要用 2③ 曲线填本行，也不要用本行填 2③**。GPU 复验见 `docs/gpu_agent_precision_reverify_todo.md` 任务 B。验收结论：协议下不通过；属 debug 尺度过拟合导致的相对误差放大，非未加载权重。
 
 
 性能。NPU 已测，待 GPU。`mm_perf_dp1` / `mm_perf_dp2`：step>100 平均 tps **118.56** / **114.96**，线性度 **0.9696**。日志 `logs/mm_perf_dp1_npu.log`、`logs/mm_perf_dp2_npu.log`。
