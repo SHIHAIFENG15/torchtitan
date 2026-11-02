@@ -1,36 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420">
-<text x="480.0" y="28" text-anchor="middle" font-size="16" font-weight="bold">8卡/4卡 线性度（step&gt;100 稳定段）</text>
-<rect x="80" y="60" width="820" height="300" fill="#fafafa" stroke="#ccc"/>
-<line x1="80" y1="360.0" x2="900" y2="360.0" stroke="#eee"/>
-<text x="72" y="364.0" text-anchor="end" font-size="10">0.75</text>
-<line x1="80" y1="300.0" x2="900" y2="300.0" stroke="#eee"/>
-<text x="72" y="304.0" text-anchor="end" font-size="10">0.80</text>
-<line x1="80" y1="240.0" x2="900" y2="240.0" stroke="#eee"/>
-<text x="72" y="244.0" text-anchor="end" font-size="10">0.86</text>
-<line x1="80" y1="180.0" x2="900" y2="180.0" stroke="#eee"/>
-<text x="72" y="184.0" text-anchor="end" font-size="10">0.91</text>
-<line x1="80" y1="120.0" x2="900" y2="120.0" stroke="#eee"/>
-<text x="72" y="124.0" text-anchor="end" font-size="10">0.97</text>
-<line x1="80" y1="60.0" x2="900" y2="60.0" stroke="#eee"/>
-<text x="72" y="64.0" text-anchor="end" font-size="10">1.02</text>
-<rect x="121.1" y="133.5" width="57.4" height="226.5" fill="#ff7f0e"/>
-<text x="149.8" y="127.5" text-anchor="middle" font-size="10">0.9538</text>
-<rect x="186.5" y="169.1" width="57.4" height="190.9" fill="#1f77b4"/>
-<text x="215.2" y="163.1" text-anchor="middle" font-size="10">0.9218</text>
-<text x="182.5" y="380" text-anchor="middle" font-size="11">1 debugmodel</text>
-<rect x="326.1" y="114.5" width="57.4" height="245.5" fill="#ff7f0e"/>
-<text x="354.8" y="108.5" text-anchor="middle" font-size="10">0.9709</text>
-<text x="416.2" y="340.0" text-anchor="middle" font-size="10" fill="#888">GPU 待测</text>
-<text x="387.5" y="380" text-anchor="middle" font-size="11">2① with_cp</text>
-<rect x="531.1" y="131.5" width="57.4" height="228.5" fill="#ff7f0e"/>
-<text x="559.8" y="125.5" text-anchor="middle" font-size="10">0.9556</text>
-<text x="621.2" y="340.0" text-anchor="middle" font-size="10" fill="#888">GPU 待测</text>
-<text x="592.5" y="380" text-anchor="middle" font-size="11">2② fsdp2</text>
-<rect x="736.1" y="292.7" width="57.4" height="67.3" fill="#ff7f0e"/>
-<text x="764.8" y="286.7" text-anchor="middle" font-size="10">0.8106</text>
-<text x="826.2" y="340.0" text-anchor="middle" font-size="10" fill="#888">GPU 待测</text>
-<text x="797.5" y="380" text-anchor="middle" font-size="11">2③ mm_fsdp2</text>
-<text x="90" y="78" font-size="12" fill="#ff7f0e">NPU</text>
-<text x="140" y="78" font-size="12" fill="#1f77b4">GPU</text>
-<text x="80" y="408" font-size="11" fill="#555">判定：|NPU线性度−GPU线性度|×100 ≤ 2 个百分点。第 1 行差 3.20pp → 不达标；第 2 行待 GPU。</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="480">
+<text x="590.0" y="28" text-anchor="middle" font-size="16" font-weight="bold">8/4 card linearity (stable tps, step&gt;100)</text>
+<rect x="70" y="55" width="1040" height="300" fill="#fafafa" stroke="#ccc"/>
+<line x1="70" y1="355.0" x2="1110" y2="355.0" stroke="#eee"/>
+<text x="62" y="359.0" text-anchor="end" font-size="10">0.75</text>
+<line x1="70" y1="295.0" x2="1110" y2="295.0" stroke="#eee"/>
+<text x="62" y="299.0" text-anchor="end" font-size="10">0.80</text>
+<line x1="70" y1="235.0" x2="1110" y2="235.0" stroke="#eee"/>
+<text x="62" y="239.0" text-anchor="end" font-size="10">0.86</text>
+<line x1="70" y1="175.0" x2="1110" y2="175.0" stroke="#eee"/>
+<text x="62" y="179.0" text-anchor="end" font-size="10">0.91</text>
+<line x1="70" y1="115.0" x2="1110" y2="115.0" stroke="#eee"/>
+<text x="62" y="119.0" text-anchor="end" font-size="10">0.97</text>
+<line x1="70" y1="55.0" x2="1110" y2="55.0" stroke="#eee"/>
+<text x="62" y="59.0" text-anchor="end" font-size="10">1.02</text>
+<rect x="102.7" y="128.5" width="38.6" height="226.5" fill="#ff7f0e"/>
+<text x="122.0" y="122.5" text-anchor="middle" font-size="9">0.9538</text>
+<rect x="147.3" y="164.1" width="38.6" height="190.9" fill="#1f77b4"/>
+<text x="166.6" y="158.1" text-anchor="middle" font-size="9">0.9218</text>
+<text x="144.3" y="391" text-anchor="middle" font-size="10" fill="#c62828">delta 3.20pp</text>
+<text x="144.3" y="375" text-anchor="middle" font-size="10">1 debugmodel</text>
+<rect x="251.2" y="109.5" width="38.6" height="245.5" fill="#ff7f0e"/>
+<text x="270.5" y="103.5" text-anchor="middle" font-size="9">0.9709</text>
+<rect x="295.9" y="94.6" width="38.6" height="260.4" fill="#1f77b4"/>
+<text x="315.2" y="88.6" text-anchor="middle" font-size="9">0.9844</text>
+<text x="292.9" y="391" text-anchor="middle" font-size="10" fill="#2e7d32">delta 1.35pp</text>
+<text x="292.9" y="375" text-anchor="middle" font-size="10">2(1) with_cp</text>
+<rect x="399.8" y="126.5" width="38.6" height="228.5" fill="#ff7f0e"/>
+<text x="419.1" y="120.5" text-anchor="middle" font-size="9">0.9556</text>
+<rect x="444.4" y="113.5" width="38.6" height="241.5" fill="#1f77b4"/>
+<text x="463.7" y="107.5" text-anchor="middle" font-size="9">0.9673</text>
+<text x="441.4" y="391" text-anchor="middle" font-size="10" fill="#2e7d32">delta 1.17pp</text>
+<text x="441.4" y="375" text-anchor="middle" font-size="10">2(2) fsdp2</text>
+<rect x="548.4" y="287.7" width="38.6" height="67.3" fill="#ff7f0e"/>
+<text x="567.7" y="281.7" text-anchor="middle" font-size="9">0.8106</text>
+<rect x="593.0" y="282.4" width="38.6" height="72.6" fill="#1f77b4"/>
+<text x="612.3" y="276.4" text-anchor="middle" font-size="9">0.8153</text>
+<text x="590.0" y="391" text-anchor="middle" font-size="10" fill="#2e7d32">delta 0.47pp</text>
+<text x="590.0" y="375" text-anchor="middle" font-size="10">2(3) mm_fsdp2</text>
+<text x="738.6" y="205.0" text-anchor="middle" font-size="11" fill="#888">N/A</text>
+<text x="738.6" y="375" text-anchor="middle" font-size="10">3 Dist-MoE</text>
+<rect x="845.5" y="111.0" width="38.6" height="244.0" fill="#ff7f0e"/>
+<text x="864.8" y="105.0" text-anchor="middle" font-size="9">0.9696</text>
+<rect x="890.1" y="125.5" width="38.6" height="229.5" fill="#1f77b4"/>
+<text x="909.5" y="119.5" text-anchor="middle" font-size="9">0.9565</text>
+<text x="887.1" y="391" text-anchor="middle" font-size="10" fill="#2e7d32">delta 1.31pp</text>
+<text x="887.1" y="375" text-anchor="middle" font-size="10">4 debugmodel_mm</text>
+<rect x="994.1" y="185.5" width="38.6" height="169.5" fill="#ff7f0e"/>
+<text x="1013.4" y="179.5" text-anchor="middle" font-size="9">0.9026</text>
+<rect x="1038.7" y="115.8" width="38.6" height="239.2" fill="#1f77b4"/>
+<text x="1058.0" y="109.8" text-anchor="middle" font-size="9">0.9652</text>
+<text x="1035.7" y="391" text-anchor="middle" font-size="10" fill="#c62828">delta 6.26pp</text>
+<text x="1035.7" y="375" text-anchor="middle" font-size="10">5 ultradata</text>
+<text x="80" y="73" font-size="12" fill="#ff7f0e">NPU</text>
+<text x="130" y="73" font-size="12" fill="#1f77b4">GPU</text>
+<text x="70" y="413" font-size="11" fill="#555">Pass if |NPU-GPU|x100 &lt;= 2pp. Fail: row1 3.20pp, row5 6.26pp. Row3 Dist-MoE no GPU baseline.</text>
 </svg>

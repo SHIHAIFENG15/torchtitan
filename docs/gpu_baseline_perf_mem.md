@@ -156,7 +156,7 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 | 2② | `fsdp2_cp2_ep4_perf_dp2` / `_perf_dp4` | 335.02 | 324.08 | 0.9673 | 0.9556 | 1.17 | **达标** |
 | 2③ | `mm_fsdp2_…_perf_dp1` / `_perf_dp2` | 134.18 | 109.40 | 0.8153 | 0.8106 | 0.47 | **达标** |
 | 4 | `debugmodel_mm_perf_dp1` / `_perf_dp2` | 374.36 | 358.08 | 0.9565 | 0.9696 | 1.31 | **达标** |
-| 5 | `ultradata_…_perf_dp1` / `_perf_dp2`（120 步） | 10230.50 | 9874.95 | 0.9652 | 0.8990 | 6.62 | **不达标** |
+| 5 | `ultradata_…_perf_dp1` / `_perf_dp2`（120 步，NPU 两侧 EP4） | 10230.50 | 9874.95 | 0.9652 | 0.9026 | 6.26 | **不达标** |
 
 | 行 | GPU 单卡 memory (step2–20) | GPU 4 卡 memory | NPU 单卡 / 4 卡 | 内存判定 |
 | --- | --- | --- | --- | --- |
@@ -168,7 +168,7 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 
 日志（`logs/`）：`with_cp_mem_1device_gpu.log`、`with_cp_perf_dp1_gpu.log`、`with_cp_perf_dp2_gpu.log`、`fsdp2_mem_1device_gpu.log`、`fsdp2_perf_dp2_gpu.log`、`fsdp2_perf_dp4_gpu.log`、`mm_fsdp2_mem_1device_gpu.log`、`mm_fsdp2_perf_dp1_gpu.log`、`mm_fsdp2_perf_dp2_gpu.log`、`mm_mem_1device_gpu.log`、`mm_perf_dp1_gpu.log`、`mm_perf_dp2_gpu.log`、`ultradata_mem_1device_gpu.log`、`ultradata_perf_dp1_gpu.log`、`ultradata_perf_dp2_gpu.log`。
 
-配方修正：`muse_spark_debugmodel_ultradata_lora_sft_perf_dp1` 原样在 4 卡上触发 `ValueError: expert_parallel_degree (8) must divide dp_shard * cp * tp (4)`——基函数 `expert_parallel_degree=8` 硬编码且未随卡数折减。已改为基函数新增 `expert_parallel_degree: int = 8` 参数、`perf_dp1` 传 4（4 整除 dp_shard×cp×tp=4，与 8 卡"全卡 EP"语义一致）；8 卡路径数值不变。NPU 侧队列脚本同配置同参数，拉取本修复后其 4 卡档才能通过。
+配方修正：4 卡上 EP8 非法（`ep` 必须整除 `dp*cp*tp=4`）。基函数增加 `expert_parallel_degree` 参数；**线性度一对** `perf_dp1` / `perf_dp2` 两侧都传 **EP4**（只加倍 DP）。清单验收训练仍默认 EP8。NPU 定稿：4 卡 tps 378.25、8 卡 **341.40**、线性度 **0.9026**（`logs/ultradata_perf_dp{1,2}_npu.log`）。GPU 当时 8 卡仍按 EP8 跑；若要严格同网格，请用当前配方重跑 `ultradata_perf_dp2`。
 
 内存记数说明：GPU 端各 mem_1device 日志的 `memory` 普遍随步单调爬升（缓存预留增长），与 NPU 侧平稳值不同口径，按协议如实记录区间与末值；达标判定待两侧口径确认后复核。
 
@@ -182,7 +182,7 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 | --- | --- | --- | --- |
 | 1 | 3.20pp | GPU（0.92 vs NPU 0.95） | 阈值超线；不是 NPU 吞吐更差 |
 | 2①②③、4 | ≤1.35pp | — | 达标 |
-| 5 | 6.62pp | NPU（0.899 vs GPU 0.965） | 32K LoRA + EP 加倍；与第 1 行方向相反 |
+| 5 | 6.26pp | NPU（0.903 vs GPU 0.965） | 32K LoRA；NPU 两侧 EP4；与第 1 行方向相反 |
 
 ### 内存
 
@@ -236,4 +236,4 @@ GPU 请用同一三个 CONFIG 按上文命令跑完，填表后再算百分点�
 
 说明：A100 (NVLink) 上 8 卡相对 4 卡的吞吐比 0.92，低于 NPU 的 0.95；差值 3.2 个百分点超出 2 个百分点阈值，按协议如实记为不达标。若需复测，建议在独占时段重跑 `perf_dp4`。
 
-NPU 第 5 行 8 卡定稿日志：`logs/ultradata_perf_dp2_npu.ep8.log`（后续同名 `ultradata_perf_dp2_npu.log` 若被覆盖重跑，验收以 ep8 定稿为准）。
+NPU 第 5 行线性度定稿：两侧 EP4 的 `logs/ultradata_perf_dp1_npu.log`、`logs/ultradata_perf_dp2_npu.log`（341.40 / 378.25 = 0.9026）。旧 EP8 8 卡备份：`logs/ultradata_perf_dp2_npu.ep8.log`。

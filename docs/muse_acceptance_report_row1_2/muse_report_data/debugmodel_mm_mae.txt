@@ -1,0 +1,2 @@
+loss: steps=1000 mae=0.0306737 mre=0.198147 FAIL
+grad_norm: steps=1000 mae=0.665051 mre=0.675328 FAIL

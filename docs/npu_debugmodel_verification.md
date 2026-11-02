@@ -24,79 +24,6 @@ GPU 机器上的环境、缺数和取数步骤写在 `docs/gpu_baseline_setup.md
 
 ---
 
-### 第 1 行
-
-`muse_spark_debugmodel`，网格 `dp_shard=2, tp=2, ep=2`。`det_debugmodel_r04_r1/r2.log`，两次 loss、grad_norm 逐项相同，并且和旧日志 `item2_logs/det_debugmodel_r1.log` 的 10 步完全相同。
-
-| step | loss | grad_norm | r1 tps | r2 tps |
-| --- | --- | --- | --- | --- |
-| 1 | 7.68353 | 4.7419 | 18 | 18 |
-| 2 | 6.88134 | 3.2349 | 315 | 260 |
-| 3 | 5.98353 | 2.3663 | 327 | 266 |
-| 4 | 5.61493 | 1.9338 | 327 | 246 |
-| 5 | 6.05757 | 1.7812 | 323 | 290 |
-| 6 | 5.39870 | 1.6968 | 326 | 282 |
-| 7 | 5.23369 | 1.6693 | 316 | 287 |
-| 8 | 5.46803 | 1.5549 | 304 | 270 |
-| 9 | 5.07188 | 1.7912 | 307 | 283 |
-| 10 | 4.98734 | 1.6464 | 318 | 288 |
-
-memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一样，只说明计时不同。
-
-### 第 2 行 ① with_cp
-
-网格 `dp_shard=1, cp=2, tp=2, ep=2`，4 卡。先有一趟没开确定性的 `with_cp_4card_r3.log`（17:33 CST，`Training completed`）：loss 7.71652，6.99130，6.11190，5.75051，5.82153，5.51257，5.34266，6.02426，5.30019，5.21196；grad_norm 4.9245 到 1.8415。这趟只证明反向能走完。
-
-正式对照是 `det_with_cp_r04_r1/r2.log`。两次 loss、grad_norm 逐项相同。
-
-| step | loss | grad_norm |
-| --- | --- | --- |
-| 1 | 7.72229 | 5.1450 |
-| 2 | 6.93197 | 3.9766 |
-| 3 | 6.03953 | 2.8388 |
-| 4 | 5.71570 | 2.2161 |
-| 5 | 5.73440 | 2.1739 |
-| 6 | 5.44686 | 1.8826 |
-| 7 | 5.28071 | 1.9517 |
-| 8 | 5.90602 | 2.0066 |
-| 9 | 5.17893 | 2.0813 |
-| 10 | 5.12831 | 1.8717 |
-
-稳定步 tps 大约 130–145。r1 第 1 步 memory 0.24GiB（编译），r2 第 1 步 0.08GiB，其后都是 0.10GiB。
-
-### 第 2 行 ② FSDP2×CP2×EP4
-
-`tests.integration_tests.models` 的 `muse_spark_debugmodel_fsdp2_cp2_ep4`，网格 `dp_shard=2, cp=2, ep=4`。`det_fsdp2_r04_r1/r2.log` 两次逐项相同，并且和旧日志 `item2_logs/det_fsdp2_r1.log` 的 10 步 loss、grad_norm 完全相同：7.73262，6.89378，5.99186，5.64755，6.07865，5.43435，5.27176，5.50165，5.10669，5.01443；grad_norm 4.6582 到 1.6591。memory 稳定在 0.12GiB。稳定步 tps 大约 112–124。
-
-### 第 2 行 ③ 8 卡多模态
-
-`muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4`，网格 `dp_shard=2, cp=2, tp=2, ep=4`，8 卡。1 号卡上的 `pytest test_nested_reduction.py`（pid 203951）没有停，8 卡任务和它叠在同一张卡上跑。pytest 在训练结束之后仍在。
-
-`det_mm_r04_r1.log`：17:50 CST 进入第 1 步，17:55 `Training completed`。`det_mm_r04_r2.log`：18:13 CST 进入第 1 步，18:14 `Training completed`。两次都开了 `HCCL_DETERMINISTIC=true` 和 `MUSE_DEBUG_DETERMINISTIC=1`。10 步 loss、grad_norm 逐项相同，下表两趟共用。r2 的 memory 更低（第 1 步 0.07GiB，其后 0.12GiB），因为编译缓存已经热了；tps 也不相同。旧的多模态日志没有设 seed，不和这次逐项比。
-
-| step | loss | grad_norm | memory | tps |
-| --- | --- | --- | --- | --- |
-| 1 | 7.67449 | 10.1172 | 0.23GiB | 1 |
-| 2 | 6.84383 | 6.4551 | 0.26GiB | 2 |
-| 3 | 5.69314 | 4.1008 | 0.26GiB | 32 |
-| 4 | 6.02861 | 5.0077 | 0.26GiB | 36 |
-| 5 | 4.36879 | 5.0873 | 0.26GiB | 5 |
-| 6 | 5.64743 | 3.7888 | 0.26GiB | 36 |
-| 7 | 4.94917 | 2.9002 | 0.26GiB | 37 |
-| 8 | 3.33959 | 3.2298 | 0.26GiB | 5 |
-| 9 | 3.95203 | 2.8241 | 0.26GiB | 37 |
-| 10 | 4.55447 | 2.8045 | 0.26GiB | 38 |
-
-第 1、2、5、8 步 tps 掉到个位数，对应 flex attention 编译。第 6 步前有一条 `Sample length 633 > training max_context_length=512`，该样本被跳过。r1 稳定步 memory 0.26GiB；r2 稳定步 0.12GiB。loss 和 grad_norm 不受这个差别影响。
-
-精度。不达标。1000 步 loss MAE 0.03100，平均相对误差 16.82%。两条门槛都没过。grad_norm 相对误差 41.6%，不进精度门槛。数在 `docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`。这组数不能填第 4 行。GPU 曲线已复验（2026-11-02）：同一 step-0 重跑 1000 步，`docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000_r2.txt` 与 r1 逐位相同（MAE=0），r2 对 NPU 与原判定一致，不达标结论稳定可复现（日志 `logs/mm_fsdp2_precision_r2_gpu.log`）。
-
-性能。GPU 已测，待 NPU 同配方对照。GPU `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4_perf_dp1`（4 卡，`dp_shard=1, cp=2, tp=2, ep=4`）与 `_perf_dp2`（8 卡，`dp_shard=2`）各 150 步。2026-11-02，step>100 平均 tps：4 卡 **134.18**，8 卡 **109.40**，线性度 **0.8153**（编译掉速步已剔除）。日志 `logs/mm_fsdp2_perf_dp1_gpu.log`、`logs/mm_fsdp2_perf_dp2_gpu.log`。NPU 同 CONFIG 跑完后算差值判定。
-
-内存。GPU 已测，待 NPU 单卡对照。GPU 单卡 `mm_fsdp2_mem_1device` step 2–20：**2.39–14.15GiB，随步爬升，无稳定值**（末步 14.15；`logs/mm_fsdp2_mem_1device_gpu.log`）。GPU 4 卡（perf_dp1 step>100 末值）**2.24GiB**。NPU 单卡未跑；NPU 日志预留稳定步 0.26GiB、0.12GiB 两档。等 NPU 单卡数后判定。GPU 上 nvidia-smi 整卡占用和日志预留不是同一个数。多模态的 `grid_sample` 反传在 GPU 上走了 CPU，loss 和内存都含这一层。
-
-确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
-
 ## 第 1 行：基础 debugmodel 文本训练
 
 | 项 | 内容 |
@@ -106,7 +33,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 | 清单并行 | 单卡；dim 256 / 8 层 / 8 experts；seq_len 512；10 步 |
 | 实际网格 | 跟配方默认，不是单卡：`pp=1, dp_replicate=1, dp_shard=2, cp=1, tp=2, ep=2`，4 卡。世界大小 `1 × 2 × 1 × 2 × 1 = 4`。EP 从这 4 个进程里分专家，不另加进程。序列并行跟着张量并行，也不另加进程 |
 | 数据 / 优化 | `tests/assets/c4_test/data.json`，`shuffle=False`；AdamW lr=`8e-4`，warmup 2；词表 2048；`checkpointer=None` |
-| 结果 | 训练循环跑通。正式对照用确定性两次：`det_debugmodel_r1/r2.log`（`HCCL_DETERMINISTIC=true`，`seed=42`，`debug.deterministic=True`，`deterministic_warn_only` 保持默认 False） |
+| 结果 | 训练循环跑通。正式对照用确定性两次：`det_debugmodel_r04_r1/r2.log`（与旧 `item2_logs/det_debugmodel_r1.log` 的 10 步 loss/grad_norm 相同；`HCCL_DETERMINISTIC=true`，`seed=42`，`debug.deterministic=True`，`deterministic_warn_only` 保持默认 False） |
 
 配置核对：
 
@@ -238,7 +165,22 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 | 清单 | 4 卡：TP2 × EP2 × CP2；Ulysses CP |
 | 实际网格 | `dp_shard=1, tp=2, ep=2, cp=2, SP=True`，世界大小 4。`train_timeout_seconds=1800`；`override.imports=[]`（去掉 CUDA Helion/SwiGLU） |
 | CP 算法 | Ulysses（`_muse_spark_context_parallel_transform`） |
-| 结果 | 跑通。确定性两次：`det_with_cp_r04_r1/r2.log`，10 步 loss、grad_norm 逐项相同。数见表首「第 2 行 ①」 |
+| 结果 | 跑通。先有一趟没开确定性的 `with_cp_4card_r3.log`（只证明反向走完）。正式对照：`det_with_cp_r04_r1/r2.log`，10 步 loss、grad_norm 逐项相同 |
+
+| step | loss | grad_norm |
+| --- | --- | --- |
+| 1 | 7.72229 | 5.1450 |
+| 2 | 6.93197 | 3.9766 |
+| 3 | 6.03953 | 2.8388 |
+| 4 | 5.71570 | 2.2161 |
+| 5 | 5.73440 | 2.1739 |
+| 6 | 5.44686 | 1.8826 |
+| 7 | 5.28071 | 1.9517 |
+| 8 | 5.90602 | 2.0066 |
+| 9 | 5.17893 | 2.0813 |
+| 10 | 5.12831 | 1.8717 |
+
+稳定步 tps 大约 130–145。r1 第 1 步 memory 0.24GiB（编译），r2 第 1 步 0.08GiB，其后都是 0.10GiB。
 
 精度。达标。同一份 `outputs/checkpoint-with_cp/step-0`，两边各 1000 步。loss MAE 0.01900，平均相对误差 0.73%，两条都过。曲线在 `docs/npu_baseline/with_cp_1000.txt`。分析见 `docs/npu_gpu_acceptance_report.md`。
 
@@ -258,7 +200,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 | 项 | 内容 |
 | --- | --- |
 | 网格 | `dp_shard=2, cp=2, tp=1, ep=4`，4 卡；AllGatherKV CP |
-| 结果 | 跑通。2026-10-28 先有一趟非确定性：2、3、4、5 号卡，10 步退出码 0，loss 7.76808→5.02892，grad_norm 4.6650→1.6260。后来按和第 1 行相同的确定性开关连跑两次：`det_fsdp2_r1/r2.log`，10 步 loss、grad_norm 打印值相同 |
+| 结果 | 跑通。2026-10-28 先有一趟非确定性：2、3、4、5 号卡，10 步退出码 0，loss 7.76808→5.02892，grad_norm 4.6650→1.6260。正式对照：`det_fsdp2_r04_r1/r2.log`（与旧 `item2_logs/det_fsdp2_r1.log` 的 10 步 loss/grad_norm 相同） |
 
 | step | loss | grad_norm | r1 memory | r1 tps | r2 memory | r2 tps |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -277,9 +219,9 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 精度。达标。1000 步 loss MAE 0.01422，平均相对误差 0.58%。grad_norm 相对误差 7.97%，不进精度门槛。数在 `docs/npu_baseline/fsdp2_cp2_ep4_mae.txt`。
 
-性能。GPU 已测，待 NPU 同配方对照。GPU `muse_spark_debugmodel_fsdp2_cp2_ep4_perf_dp2`（4 卡，`dp_shard=2, cp=2, tp=1, ep=4`）与 `_perf_dp4`（8 卡，`dp_shard=4`）各 200 步。2026-11-02，step>100 平均 tps：4 卡 **335.02**，8 卡 **324.08**，线性度 **0.9673**（前后半段 335.3/334.7，平稳）。日志 `logs/fsdp2_perf_dp2_gpu.log`、`logs/fsdp2_perf_dp4_gpu.log`。NPU 同 CONFIG 跑完后算差值判定。
+性能。达标（NPU、GPU 同配方对照已闭环）。NPU `fsdp2_perf_dp2` / `perf_dp4`：step>100 平均 tps **121.64** / **116.24**，线性度 **0.9556**。GPU：**335.02** / **324.08**，线性度 **0.9673**。差 **1.17pp ≤ 2**。日志 `logs/fsdp2_perf_dp{2,4}_{npu,gpu}.log`。
 
-内存。GPU 已测，待 NPU 单卡对照。GPU 单卡 `fsdp2_mem_1device` step 2–20：**1.46–3.85GiB，随步爬升，无稳定值**（末步 3.85；`logs/fsdp2_mem_1device_gpu.log`）。GPU 4 卡（perf_dp2 step>100 末值）**0.49GiB**。NPU 单卡未跑；NPU 4 卡稳定预留 0.12GiB。等 NPU 单卡数后按同场景判定。
+内存。不达标（已闭环）。NPU 单卡 **0.25GiB**、4 卡 **0.12GiB**；GPU 单卡 **1.46–3.85GiB（随步爬升，末 3.85）**、4 卡 **0.49GiB**。不同量级。
 
 #### 原因分析（内存 A：GPU 预留爬升）
 
@@ -343,26 +285,36 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 - 单帧 `torch.cat` 得到的是原张量。视觉编码器返回前做了 `contiguous()`，避免 FSDP 把输出当成 view 丢掉 pre-backward all-gather。
 - loss 在编译期跳过 `_assert_async`。910B 的 inductor 给这个 0 维 device assert 做代码生成时会挂住。
 
-没有和一份参考 loss 对过。这次只说明 8 卡多模态 debugmodel 的 10 步训练循环能走完。
+没有和一份参考 loss 对过。上面两趟（2.3 / 2.2）都没开确定性种子，只说明 8 卡循环能走完。正式确定性两次如下。
 
-这是没开确定性种子的旧跑，只说明 8 卡循环能走完。正式确定性两次见文首「第 2 行 ③」。
+正式对照：`det_mm_r04_r1.log`（17:50 CST 进入第 1 步，17:55 完成）、`det_mm_r04_r2.log`（18:13–18:14）。两次都开了 `HCCL_DETERMINISTIC=true` 和 `MUSE_DEBUG_DETERMINISTIC=1`。10 步 loss、grad_norm 逐项相同，下表两趟共用。跑的时候 1 号卡上有别人的 `pytest test_nested_reduction.py` 叠跑，不影响 loss/grad_norm。r2 的 memory 更低（第 1 步 0.07GiB，其后 0.12GiB），因为编译缓存已热；tps 也不相同。旧的无 seed 多模态日志不和这次逐项比。
 
-精度。这趟没有 1000 步共享权重，不达标。第 1 步离 `ln(2048)` 差 0.037，只说明尺度。
+| step | loss | grad_norm | memory | tps |
+| --- | --- | --- | --- | --- |
+| 1 | 7.67449 | 10.1172 | 0.23GiB | 1 |
+| 2 | 6.84383 | 6.4551 | 0.26GiB | 2 |
+| 3 | 5.69314 | 4.1008 | 0.26GiB | 32 |
+| 4 | 6.02861 | 5.0077 | 0.26GiB | 36 |
+| 5 | 4.36879 | 5.0873 | 0.26GiB | 5 |
+| 6 | 5.64743 | 3.7888 | 0.26GiB | 36 |
+| 7 | 4.94917 | 2.9002 | 0.26GiB | 37 |
+| 8 | 3.33959 | 3.2298 | 0.26GiB | 5 |
+| 9 | 3.95203 | 2.8241 | 0.26GiB | 37 |
+| 10 | 4.55447 | 2.8045 | 0.26GiB | 38 |
 
-性能。未测。稳定段约 39 tps，不能和第 1、2 行相除，也没有满 100 步。
+第 1、2、5、8 步 tps 掉到个位数，对应 flex attention 编译。第 6 步前有一条 `Sample length 633 > training max_context_length=512`，该样本被跳过。r1 稳定步 memory 0.26GiB；r2 稳定步 0.12GiB。loss 和 grad_norm 不受这个差别影响。
+
+精度。不达标。1000 步 loss MAE 0.03100，平均相对误差 16.82%。两条门槛都没过。grad_norm 相对误差 41.6%，不进精度门槛。数在 `docs/npu_baseline/mm_fsdp2_tp2_cp2_ep4_mae.txt`。这组数不能填第 4 行。GPU 曲线已复验（2026-11-02）：同一 step-0 重跑 1000 步，`docs/gpu_baseline/mm_fsdp2_tp2_cp2_ep4_1000_r2.txt` 与 r1 逐位相同（MAE=0），r2 对 NPU 与原判定一致，不达标结论稳定可复现（日志 `logs/mm_fsdp2_precision_r2_gpu.log`）。
 
 性能。达标（NPU、GPU 同配方对照已闭环）。NPU `mm_fsdp2_perf_dp1` / `perf_dp2`：step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。GPU：**134.18** / **109.40**，线性度 **0.8153**。差 **0.47pp ≤ 2**。视觉长度重编译掉速步两边都有，记数仍按 step>100 全平均。
 
-内存。不达标（已闭环）。NPU 单卡 **0.28GiB**、4 卡 **0.15GiB**；GPU 单卡 **2.39–14.15GiB（随步爬升，末 14.15）**、4 卡 **2.24GiB**。不同量级。
+内存。不达标（已闭环）。NPU 单卡 **0.28GiB**、4 卡 **0.15GiB**；GPU 单卡 **2.39–14.15GiB（随步爬升，末 14.15）**、4 卡 **2.24GiB**。不同量级。nvidia-smi 整卡占用和日志预留不是同一个数。多模态的 `grid_sample` 反传在 GPU 上走了 CPU，loss 和内存都含这一层。
 
 #### 原因分析（内存 A：GPU 预留爬升）
 
 与第 2①② 同类，多模态末值更高（视觉长度重编译尖峰）。属「内存 A」，见验收报告。
 
-=======
-内存。未测。没有这趟的 GPU 预留，单卡没跑。稳定预留 0.24GiB。
-
-确定性。这趟两台机器都没开种子，不作确定性验收。正式两次见文首「第 2 行 ③」，已达标。
+确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
 #### 换机器复现这条 8 卡
 
@@ -503,9 +455,9 @@ mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 
 精度。不达标。1000 步 loss MAE 0.03067，平均相对误差 19.81%。两条门槛都没过。grad_norm 相对误差 67.5%，不进精度门槛。数在 `docs/npu_baseline/debugmodel_mm_mae.txt`。不要用第 2 行③的曲线填这里。GPU 曲线已复验（2026-11-02）：同一 step-0 重跑 1000 步，`docs/gpu_baseline/debugmodel_mm_1000_r2.txt` 与 r1 逐位相同（MAE=0），r2 对 NPU 与原判定一致，不达标结论稳定可复现（日志 `logs/debugmodel_mm_precision_r2_gpu.log`）。
 
-性能。GPU 已测，待 NPU 同配方对照。GPU `muse_spark_debugmodel_mm_perf_dp1`（4 卡，`dp_shard=1, cp=2, tp=2, ep=2`）与 `_perf_dp2`（8 卡，`dp_shard=2`）各 150 步。2026-11-02，step>100 平均 tps：4 卡 **374.36**，8 卡 **358.08**，线性度 **0.9565**（前后半段 383.2/365.5 与 353.5/362.7）。日志 `logs/mm_perf_dp1_gpu.log`、`logs/mm_perf_dp2_gpu.log`。NPU 同 CONFIG 跑完后算差值判定。
+性能。达标（NPU、GPU 同配方对照已闭环，差 1.31pp）。NPU `mm_perf_dp1` / `mm_perf_dp2`：step>100 平均 tps **118.56** / **114.96**，线性度 **0.9696**。GPU：**374.36** / **358.08**，线性度 **0.9565**。差 **1.31pp ≤ 2**。日志 `logs/mm_perf_dp{1,2}_{npu,gpu}.log`。
 
-内存。GPU 已测，待 NPU 单卡对照。GPU 单卡 `mm_mem_1device` step 2–20：**2.34–14.15GiB，随步爬升，无稳定值**（末步 14.15，含一次视觉长度重编译的预留尖峰；`logs/mm_mem_1device_gpu.log`）。GPU 4 卡（perf_dp1 step>100 末值）**3.19GiB**。NPU 单卡未跑；NPU 8 卡稳定预留 0.12GiB。等 NPU 单卡数后判定。
+内存。不达标（已闭环）。NPU 单卡 **0.28GiB**、4 卡 **0.15GiB**；GPU 单卡 **2.34–14.15GiB（随步爬升，末 14.15）**、4 卡 **3.19GiB**。不同量级。
 
 #### 原因分析（内存 A：GPU 预留爬升）
 
@@ -559,11 +511,11 @@ loss 停在 12.27 到 12.31，是因为词表宽度 202048，`ln(202048)` 约 12
 
 精度。达标。1000 步 loss MAE 0.000835，相对误差 0.0075%。step 0 在 `outputs/checkpoint-ultradata_lora/step-0`。11:26–18:26 UTC 跑完，退出码 0。曲线在 `docs/npu_baseline/ultradata_lora_1000.txt`。10 步 |loss diff|≤0.027 只是量级，正式数是这份 MAE。
 
-性能。不达标（NPU、GPU 同配方对照已闭环）。NPU `ultradata_perf_dp1` / `perf_dp2`（120 步，step>100）：**378.25** / **340.05**，线性度 **0.8990**（定稿 8 卡日志 `logs/ultradata_perf_dp2_npu.ep8.log`）。GPU：**10230.50** / **9874.95**，线性度 **0.9652**。差 **6.62pp > 2**。绝对 tps 不可与第 1 行横比。`perf_dp1` 的 EP=4 修正见配方。
+性能。不达标（NPU、GPU 对照已闭环）。NPU `ultradata_perf_dp1` / `perf_dp2`（120 步，两侧 EP4，step>100）：**378.25** / **341.40**，线性度 **0.9026**（`logs/ultradata_perf_dp1_npu.log`、`logs/ultradata_perf_dp2_npu.log`）。GPU：**10230.50** / **9874.95**，线性度 **0.9652**（GPU 跑时 8 卡仍为 EP8）。差 **6.26pp > 2**。绝对 tps 不可与第 1 行横比。
 
 #### 原因分析（性能）
 
-NPU 线性度 0.899、GPU 0.965——**NPU 掉更多**，与第 1 行相反。32K LoRA + EP4→8 路径；定稿用 `ultradata_perf_dp2_npu.ep8.log`。详见验收报告第 5 行。
+NPU 线性度 0.903、GPU 0.965——**NPU 掉更多**，与第 1 行相反。线性度配方两侧固定 EP4（4 卡不能 EP8）。详见验收报告第 5 行。
 
 
 内存。不达标（已闭环）。NPU 单卡 **13.25GiB**、4 卡 **4.32GiB**；GPU 单卡 **0.24–0.54GiB（随步爬升）**、4 卡 **0.44GiB**。方向与短序列行相反，需单独核查 32K 路径。

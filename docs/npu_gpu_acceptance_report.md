@@ -30,7 +30,7 @@
 | 2③ | `mm_fsdp2_tp2_cp2_ep4` 8 卡 | **不达标**（MAE 0.031，相对 16.8%） | **达标**（已测，差 0.47pp） | **不达标**（GPU 单卡爬升 2.39–14.15 vs NPU 0.28） | 达标 / 不达标 |
 | 3 | Dist-MoE bf16 | 不可做（无 GPU 基线） | 不可做 | 不可做 | 达标 / 不可做 |
 | 4 | `debugmodel_mm` 8 卡 | **不达标**（MAE 0.031，相对 19.8%） | **达标**（已测，差 1.31pp） | **不达标**（GPU 单卡爬升 2.34–14.15 vs NPU 0.28） | 达标 / 不达标 |
-| 5 | `ultradata_lora_sft` 8 卡 | **达标**（MAE 0.000835，相对 0.0075%） | **不达标**（已测，差 6.62pp） | **不达标**（NPU 单卡 13.25 vs GPU 0.24–0.54） | 达标 / 不达标 |
+| 5 | `ultradata_lora_sft` 8 卡 | **达标**（MAE 0.000835，相对 0.0075%） | **不达标**（已测，差 6.26pp；NPU 两侧 EP4） | **不达标**（NPU 单卡 13.25 vs GPU 0.24–0.54） | 达标 / 不达标 |
 
 「未测」是协议要求的对照还没跑，不是测完失败。「不达标」是按字面已经可以下结论。1000 步队列已结束。**GPU 侧五行的 perf/mem 已于 2026-11-02 全部跑完**（HEAD `75c46f03` + `ultradata perf_dp1` EP 修复，独占 8 卡，日志 `logs/*_gpu.log`；详表见 `docs/gpu_baseline_perf_mem.md`「GPU 实测结果（2026-11-02）」节）。第 2①②③/4/5 性能与内存均已用现成 NPU 日志闭环（详表见 `docs/gpu_baseline_perf_mem.md`「闭环对照」）；2①②③/4 性能达标、5 性能不达标，五行内存均不达标。
 
@@ -43,7 +43,7 @@
 | --- | --- | --- |
 | 精度 | 2③、4 | debug 多模态过拟合后 loss ~1e-3，相对误差被小分母放大；第 1 步已对齐，不是未加载权重 |
 | 性能 | 1 | 线性度差 3.20pp；**GPU** 加倍 DP 掉得更多（NPU 0.95 vs GPU 0.92），不是 NPU 绝对吞吐更差 |
-| 性能 | 5 | 线性度差 6.62pp；**NPU** 掉得更多（0.899 vs GPU 0.965），32K LoRA + EP 加倍路径，与第 1 行方向相反 |
+| 性能 | 5 | 线性度差 6.26pp；**NPU** 掉得更多（0.903 vs GPU 0.965），32K LoRA，两侧 EP4；与第 1 行方向相反 |
 | 内存 A | 2①②③、4 | GPU 日志 `memory` 随步爬升（预留），NPU 平稳 ~0.25；对照第 1 行无 CP 单卡两边都 ~0.25 且不爬 → 跟 **CP / 多形状 flex / CUDA caching allocator 预留** 相关，不是整机口径坏了 |
 | 内存 B | 5 | **方向反过来**：NPU 单卡 13.25 平稳，GPU 0.24–0.54；不能套用「GPU 预留虚高」，32K 路径要单独查 |
 | 确定性对 GPU | 几乎全行 | NPU 自洽达标；跨设备打印值不一致是协议字面要求，bf16 路径本就不保证 bit-identical |
@@ -396,23 +396,24 @@ NPU 自洽（连跑两次打印值相同）已达标。跨设备要求打印值�
 
 grad_norm 全段 MAE 0.0106、相对误差 2.73%，最大绝对差 0.453 在第 845 步。不进精度判定。10 步跨设备 |loss| ≤ 0.027 只说明量级，正式数是这份 MAE。
 
-### 性能 — 不达标（已闭环，差 6.62pp）
+### 性能 — 不达标（已闭环，差 6.26pp）
 
 | 端 | CONFIG | 网格 | step>100 平均 tps |
 | --- | --- | --- | --- |
 | NPU | `..._ultradata_lora_sft_perf_dp1` | `dp_shard=1, cp=2, tp=2, ep=4`（4 卡，120 步） | **378.25** |
-| NPU | `..._ultradata_lora_sft_perf_dp2` | `dp_shard=2, cp=2, tp=2, ep=8`（8 卡，120 步） | **340.05** |
-| GPU | 同 CONFIG | 同上 | **10230.50** / **9874.95** |
+| NPU | `..._ultradata_lora_sft_perf_dp2` | `dp_shard=2, cp=2, tp=2, ep=4`（8 卡，120 步） | **341.40** |
+| GPU | 同名 CONFIG（当时 8 卡仍为 EP8） | 4 卡 EP4 / 8 卡 EP8 | **10230.50** / **9874.95** |
 
-NPU 线性度 340.05 / 378.25 = **0.8990**；GPU **0.9652**。差 |0.8990 − 0.9652| × 100 = **6.62 个百分点 > 2**，不达标。绝对 tps 口径与第 1 行不同，不跨行比吞吐。NPU 日志：`logs/ultradata_perf_dp1_npu.log`、定稿 8 卡 `logs/ultradata_perf_dp2_npu.ep8.log`（`Training completed`；其后有人覆盖重跑 `ultradata_perf_dp2_npu.log`，验收以 ep8 定稿文件为准）。GPU：`logs/ultradata_perf_dp1_gpu.log`、`logs/ultradata_perf_dp2_gpu.log`。
+NPU 线性度 341.40 / 378.25 = **0.9026**（两侧都是 EP4，只加倍 DP）。GPU 线性度 **0.9652**（GPU 跑时 8 卡配方还是 EP8）。差 |0.9026 − 0.9652| × 100 = **6.26 个百分点 > 2**，不达标。绝对 tps 不进门槛。
+
+NPU 日志：`logs/ultradata_perf_dp1_npu.log`、`logs/ultradata_perf_dp2_npu.log`（2026-11-02 08:06–08:58 UTC，`ep=4`，`Training completed`）。旧的 EP8 8 卡备份在 `logs/ultradata_perf_dp2_npu.ep8.log` / `.ep8_mismatch.log`，**不作线性度定稿**。GPU：`logs/ultradata_perf_dp1_gpu.log`、`logs/ultradata_perf_dp2_gpu.log`。若要严格同网格，GPU 需用当前 EP4 的 `perf_dp2` 重跑 8 卡后再比一次。
 
 #### 原因分析（性能）
 
-1. NPU 线性度 **0.8990**，GPU **0.9652**，差 **6.62pp > 2**。本行是 **NPU 加倍 DP（且 EP 4→8）掉得更多**，与第 1 行「GPU 掉更多」方向相反。
+1. NPU 线性度 **0.9026**，GPU **0.9652**，差 **6.26pp > 2**。本行是 **NPU 加倍 DP 掉得更多**，与第 1 行「GPU 掉更多」方向相反。
 2. 绝对 tps（GPU ~1e4 vs NPU ~350）不可与第 1 行横比，也不进本项门槛。
-3. 配置特点：32K 上下文 + LoRA + `perf_dp1` EP=4 / `perf_dp2` EP=8。扩展变差更可能来自 **长序列通信 / EP 加倍 / HCCL 路径**，不是短序列 debug 那套。
-4. 8 卡定稿用 `logs/ultradata_perf_dp2_npu.ep8.log`；同名 `ultradata_perf_dp2_npu.log` 曾被中途重跑覆盖，验收以 ep8 为准。
-5. 后续：对 NPU 4/8 卡做通信与计算拆分 profiling；确认 EP 折减与 GPU 一致后再判是否实现问题。
+3. 线性度配方两侧固定 **EP4**（4 卡上 EP8 非法：`ep` 必须整除 `dp*cp*tp`）。清单验收训练仍用 EP8，和线性度这一对分开。
+4. 后续：GPU 用 EP4 的 `perf_dp2` 复测后更新百分点；再对 NPU 做通信/计算拆分 profiling。
 
 
 ### 内存 — 不达标（已闭环）
