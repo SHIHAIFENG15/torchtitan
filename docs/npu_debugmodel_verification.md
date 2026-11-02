@@ -308,9 +308,9 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 `grad_norm` 全段 MAE 0.648、MRE 41.6%，不进入精度门槛。
 
-性能。NPU 已测，待 GPU。`mm_fsdp2_perf_dp1` / `perf_dp2`：step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。日志 `logs/mm_fsdp2_perf_dp1_npu.log`、`logs/mm_fsdp2_perf_dp2_npu.log`。视觉长度变化触发的 flex 重编译会把部分步 tps 打到个位数，记数仍按 step>100 全平均。
+性能。达标（NPU、GPU 同配方对照已闭环）。NPU `mm_fsdp2_perf_dp1` / `perf_dp2`：step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。GPU：**134.18** / **109.40**，线性度 **0.8153**。差 **0.47pp ≤ 2**。视觉长度重编译掉速步两边都有，记数仍按 step>100 全平均。
 
-内存。NPU 已测，待 GPU。单卡 `mm_fsdp2_mem_1device` **0.28GiB**；4 卡稳定 **0.15GiB**。只比日志 `memory`。
+内存。不达标（已闭环）。NPU 单卡 **0.28GiB**、4 卡 **0.15GiB**；GPU 单卡 **2.39–14.15GiB（随步爬升，末 14.15）**、4 卡 **2.24GiB**。不同量级。
 
 确定性。达标（见文首正确跑法两次）。跨设备打印值不要求一致。
 
@@ -469,8 +469,8 @@ loss 停在 12.27 到 12.31，是因为词表宽度 202048，`ln(202048)` 约 12
 
 精度。达标。1000 步 loss MAE 0.000835，相对误差 0.0075%。step 0 在 `outputs/checkpoint-ultradata_lora/step-0`。11:26–18:26 UTC 跑完，退出码 0。曲线在 `docs/npu_baseline/ultradata_lora_1000.txt`。10 步 |loss diff|≤0.027 只是量级，正式数是这份 MAE。
 
-性能。GPU 已测，待 NPU 同配方对照。GPU `muse_spark_debugmodel_ultradata_lora_sft_perf_dp1`（4 卡，`dp_shard=1, cp=2, tp=2, ep=4`）与 `_perf_dp2`（8 卡，`dp_shard=2, ep=8`）各 120 步。2026-11-02，step>100 平均 tps：4 卡 **10230.50**，8 卡 **9874.95**，线性度 **0.9652**（前后半段 10546.7/9914.3）。日志 `logs/ultradata_perf_dp1_gpu.log`、`logs/ultradata_perf_dp2_gpu.log`。配方修正：`perf_dp1` 原样在 4 卡触发 `expert_parallel_degree (8) must divide dp_shard * cp * tp (4)`，已给基函数加 `expert_parallel_degree` 参数、4 卡传 4（8 卡路径不变）。NPU 同 CONFIG 跑完后算差值判定。
+性能。不达标（NPU、GPU 同配方对照已闭环）。NPU `ultradata_perf_dp1` / `perf_dp2`（120 步，step>100）：**378.25** / **340.05**，线性度 **0.8990**（定稿 8 卡日志 `logs/ultradata_perf_dp2_npu.ep8.log`）。GPU：**10230.50** / **9874.95**，线性度 **0.9652**。差 **6.62pp > 2**。绝对 tps 不可与第 1 行横比。`perf_dp1` 的 EP=4 修正见配方。
 
-内存。GPU 已测，待 NPU 单卡对照。GPU 单卡 `ultradata_mem_1device` step 2–20：**0.24–0.54GiB，随步爬升**（末步 0.54；`logs/ultradata_mem_1device_gpu.log`）。GPU 4 卡（perf_dp1 step>100 末值）**0.44GiB**。NPU 单卡未跑；NPU 8 卡稳定预留约 4.3GiB（GPU 8 卡日志 3.46GiB）。等 NPU 单卡数后判定。
+内存。不达标（已闭环）。NPU 单卡 **13.25GiB**、4 卡 **4.32GiB**；GPU 单卡 **0.24–0.54GiB（随步爬升）**、4 卡 **0.44GiB**。方向与短序列行相反，需单独核查 32K 路径。
 
 确定性。达标。NPU 两次 loss、grad_norm 逐项相同。INFO 日志里没有 `Dropping sample`。

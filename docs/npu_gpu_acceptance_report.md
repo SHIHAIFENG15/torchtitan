@@ -27,10 +27,10 @@
 | 1 | `muse_spark_debugmodel` 4 卡 | **达标**（相对误差 1.28%） | **不达标**（已测，差 3.20pp） | **达标** | 达标 / 不达标 |
 | 2① | `with_cp` 4 卡 | **达标**（MAE 0.019，相对 0.73%） | **达标**（已测，差 1.35pp） | **不达标**（GPU 预留显著更高且随步爬升） | 达标 / 不达标 |
 | 2② | `fsdp2_cp2_ep4` 4 卡 | **达标**（MAE 0.014，相对 0.58%） | **达标**（已测，差 1.17pp） | **不达标**（GPU 单卡爬升 1.46–3.85 vs NPU 0.25） | 达标 / 不达标 |
-| 2③ | `mm_fsdp2_tp2_cp2_ep4` 8 卡 | **不达标**（MAE 0.031，相对 16.8%） | **达标**（已测，差 0.47pp） | 待 NPU 单卡（GPU 单卡爬升 2.39–14.15） | 达标 / 不达标 |
+| 2③ | `mm_fsdp2_tp2_cp2_ep4` 8 卡 | **不达标**（MAE 0.031，相对 16.8%） | **达标**（已测，差 0.47pp） | **不达标**（GPU 单卡爬升 2.39–14.15 vs NPU 0.28） | 达标 / 不达标 |
 | 3 | Dist-MoE bf16 | 不可做（无 GPU 基线） | 不可做 | 不可做 | 达标 / 不可做 |
 | 4 | `debugmodel_mm` 8 卡 | **不达标**（MAE 0.031，相对 19.8%） | **达标**（已测，差 1.31pp） | **不达标**（GPU 单卡爬升 2.34–14.15 vs NPU 0.28） | 达标 / 不达标 |
-| 5 | `ultradata_lora_sft` 8 卡 | **达标**（MAE 0.000835，相对 0.0075%） | GPU 已测（0.9652），待 NPU | GPU 已测（单卡爬升 0.24–0.54 / 4 卡 0.44），待 NPU | 达标 / 不达标 |
+| 5 | `ultradata_lora_sft` 8 卡 | **达标**（MAE 0.000835，相对 0.0075%） | **不达标**（已测，差 6.62pp） | **不达标**（NPU 单卡 13.25 vs GPU 0.24–0.54） | 达标 / 不达标 |
 
 「未测」是协议要求的对照还没跑，不是测完失败。「不达标」是按字面已经可以下结论。1000 步队列已结束。**GPU 侧五行的 perf/mem 已于 2026-11-02 全部跑完**（HEAD `75c46f03` + `ultradata perf_dp1` EP 修复，独占 8 卡，日志 `logs/*_gpu.log`；详表见 `docs/gpu_baseline_perf_mem.md`「GPU 实测结果（2026-11-02）」节）。第 2① with_cp 双侧已闭环：性能达标（1.35pp）、内存不达标（GPU 预留显著更高）。其余行等 NPU 对应数填差值后出判定。
 
@@ -153,7 +153,7 @@ step 0：`outputs/checkpoint-fsdp2_cp2_ep4/step-0`。GPU `docs/gpu_baseline/fsdp
 
 grad_norm 全段 MAE 0.046、相对误差 7.97%，不过线。不影响精度判定。10 步各自初始化的 loss 差大约 0.04～0.12，不是这项。
 
-### 性能 — GPU 已测，待 NPU
+### 性能 — 达标（已闭环，差 1.17pp）
 
 GPU（2026-11-02，`fsdp2_perf_dp2` / `fsdp2_perf_dp4`，200 步，step>100 各 100 步均值，趋势平稳）：
 
@@ -191,7 +191,7 @@ step 0：`outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`。GPU `docs/gpu_baseli
 
 grad_norm 全段 MAE 0.648、相对误差 41.6%，最大绝对差 8.41 在第 396 步。不进精度判定。10 步各自初始化的差不是这项。
 
-### 性能 — GPU 已测，待 NPU
+### 性能 — 达标（已闭环）
 
 GPU（2026-11-02，`mm_fsdp2_perf_dp1` / `mm_fsdp2_perf_dp2`，150 步，step>100 共 50 步均值，前后半段 136.0/132.4 与 111.3/107.5，平稳）：
 
@@ -202,9 +202,14 @@ GPU（2026-11-02，`mm_fsdp2_perf_dp1` / `mm_fsdp2_perf_dp2`，150 步，step>10
 
 GPU 线性度 109.40 / 134.18 = **0.8153**。NPU 同 CONFIG（2026-11-02）：`mm_fsdp2_perf_dp1` / `perf_dp2` step>100 平均 tps **47.94** / **38.86**，线性度 **0.8106**。差 |0.8106 − 0.8153| × 100 = **0.47 个百分点**，≤ 2，**达标**（两侧都受视觉长度重编译影响，比值高度一致）。日志 `logs/mm_fsdp2_perf_dp1_gpu.log`、`logs/mm_fsdp2_perf_dp2_gpu.log`、`logs/mm_fsdp2_perf_dp1_npu.log`、`logs/mm_fsdp2_perf_dp2_npu.log`。
 
-### 内存 — GPU 已测，待 NPU 单卡对照
+### 内存 — 不达标（已闭环）
 
-GPU 单卡（`mm_fsdp2_mem_1device`，step2–20）：**2.39–14.15GiB，随步爬升，无稳定值**（末步 14.15，含一次视觉长度重编译的预留尖峰）。GPU 4 卡（perf_dp1 step>100 末值）：**2.24GiB**。NPU 单卡未跑、8 卡稳定 0.12–0.26GiB。等 NPU 单卡数后判定；GPU 爬升现象与第 2①② 一致，`grid_sample` 反传走 CPU 的层也在预留里。
+| 端 | 单卡 `mm_fsdp2_mem_1device`（step2–20） | 4 卡 `perf_dp1` 稳定段 |
+| --- | --- | --- |
+| NPU | **0.28GiB**（`logs/mm_fsdp2_mem_1device_npu.log`） | **0.15GiB** |
+| GPU | **2.39–14.15GiB，随步爬升，无稳定值**（末 14.15；`logs/mm_fsdp2_mem_1device_gpu.log`） | **2.24GiB** |
+
+单卡约 8–50 倍、4 卡约 15 倍，不同量级。GPU 爬升与第 2①② 同类；`grid_sample` 反传走 CPU 也计入预留。
 
 ### 确定性 — NPU 达标，对 GPU 不达标
 
@@ -241,7 +246,7 @@ step 0：`outputs/checkpoint-debugmodel_mm/step-0`。GPU `docs/gpu_baseline/debu
 
 grad_norm 全段 MAE 0.665、相对误差 67.5%，最大绝对差 12.87 在第 443 步。不进精度判定。10 步各自初始化的差不是这项。
 
-### 性能 — GPU 已测，待 NPU
+### 性能 — 达标（已闭环，差 1.31pp）
 
 GPU（2026-11-02，`mm_perf_dp1` / `mm_perf_dp2`，150 步，step>100 共 50 步均值，前后半段 383.2/365.5 与 353.5/362.7）：
 
@@ -279,20 +284,24 @@ GPU 单卡（`mm_mem_1device`，step2–20）：**2.34–14.15GiB，随步爬升
 
 grad_norm 全段 MAE 0.0106、相对误差 2.73%，最大绝对差 0.453 在第 845 步。不进精度判定。10 步跨设备 |loss| ≤ 0.027 只说明量级，正式数是这份 MAE。
 
-### 性能 — GPU 已测，待 NPU
-
-GPU（2026-11-02，`ultradata_perf_dp1` / `ultradata_perf_dp2`，120 步，step>100 共 20 步均值，前后半段 10546.7/9914.3）：
+### 性能 — 不达标（已闭环，差 6.62pp）
 
 | 端 | CONFIG | 网格 | step>100 平均 tps |
 | --- | --- | --- | --- |
-| GPU | `muse_spark_debugmodel_ultradata_lora_sft_perf_dp1` | `dp_shard=1, cp=2, tp=2, ep=4`（4 卡） | **10230.50** |
-| GPU | `muse_spark_debugmodel_ultradata_lora_sft_perf_dp2` | `dp_shard=2, cp=2, tp=2, ep=8`（8 卡） | **9874.95** |
+| NPU | `..._ultradata_lora_sft_perf_dp1` | `dp_shard=1, cp=2, tp=2, ep=4`（4 卡，120 步） | **378.25** |
+| NPU | `..._ultradata_lora_sft_perf_dp2` | `dp_shard=2, cp=2, tp=2, ep=8`（8 卡，120 步） | **340.05** |
+| GPU | 同 CONFIG | 同上 | **10230.50** / **9874.95** |
 
-GPU 线性度 9874.95 / 10230.50 = **0.9652**。日志 `logs/ultradata_perf_dp1_gpu.log`、`logs/ultradata_perf_dp2_gpu.log`。等 NPU 同 CONFIG 数出来后算差值判定。
+NPU 线性度 340.05 / 378.25 = **0.8990**；GPU **0.9652**。差 |0.8990 − 0.9652| × 100 = **6.62 个百分点 > 2**，不达标。绝对 tps 口径与第 1 行不同，不跨行比吞吐。NPU 日志：`logs/ultradata_perf_dp1_npu.log`、定稿 8 卡 `logs/ultradata_perf_dp2_npu.ep8.log`（`Training completed`；其后有人覆盖重跑 `ultradata_perf_dp2_npu.log`，验收以 ep8 定稿文件为准）。GPU：`logs/ultradata_perf_dp1_gpu.log`、`logs/ultradata_perf_dp2_gpu.log`。
 
-### 内存 — GPU 已测，待 NPU
+### 内存 — 不达标（已闭环）
 
-GPU 单卡（`ultradata_mem_1device`，step2–20）：**0.24–0.54GiB，随步爬升**（末步 0.54）。GPU 4 卡（perf_dp1 step>100 末值）：**0.44GiB**。NPU 单卡未跑、8 卡稳定预留约 4.3GiB（GPU 8 卡日志 3.46GiB）。等 NPU 单卡数后判定。
+| 端 | 单卡 `ultradata_mem_1device`（step2–20） | 4 卡 `perf_dp1` 稳定段 |
+| --- | --- | --- |
+| NPU | **13.25GiB**（平稳；`logs/ultradata_mem_1device_npu.log`） | **4.32GiB** |
+| GPU | **0.24–0.54GiB，随步爬升**（末 0.54；`logs/ultradata_mem_1device_gpu.log`） | **0.44GiB** |
+
+单卡 NPU 约为 GPU 末值的 24 倍，4 卡约 10 倍，不同量级。与第 2/4 行「GPU 预留偏高」方向相反，32K LoRA 路径两侧预留行为都需单独核查，不能和 debug 短序列行混谈。
 
 ### 确定性 — NPU 达标，对 GPU 不达标
 
@@ -316,7 +325,7 @@ GPU 单卡（`ultradata_mem_1device`，step2–20）：**0.24–0.54GiB，随步
 | assistant-only 标签 | 前 3 条有效 label 4626、6512、5426。system、user、tool 的监督数是 0 |
 | LoRA 梯度 | 40 个投影的基座梯度都是 0。lora_B 有 39 个非 0。12 个 lora_A 为 0，因为对应的 B 初值是 0 |
 
-CPU 上的 flex attention 没有反向，LoRA 是逐层投影反传，不是 8 卡整网一步。队列已经结束。**第 2①②③、4、5 行的 GPU perf/mem 已于 2026-11-02 全部补齐**（见 `docs/gpu_baseline_perf_mem.md`「GPU 实测结果（2026-11-02）」节），缺的只剩 NPU 对应行的数。
+CPU 上的 flex attention 没有反向，LoRA 是逐层投影反传，不是 8 卡整网一步。队列已经结束。**第 2①②③、4、5 行的 GPU perf/mem 已于 2026-11-02 全部补齐**（见 `docs/gpu_baseline_perf_mem.md`「GPU 实测结果（2026-11-02）」节），NPU 对应行已于 2026-11-02 补齐并完成对照判定。
 
 ## 现在在跑的 NPU 任务
 
@@ -331,7 +340,7 @@ CPU 上的 flex attention 没有反向，LoRA 是逐层投影反传，不是 8 �
 | `debugmodel_mm` | 完成。精度不达标，MAE 0.03067，相对 19.81% |
 | `ultradata_lora` | 完成。精度达标，MAE 0.000835，相对 0.0075% |
 
-每份导出后写入 `/workspace/npu_load_1000/<名>/mae.txt`，六份都已抄到 `docs/npu_baseline/`。队列已于 18:26 UTC 结束。第 2① with_cp 的 NPU 性能/单卡内存已于 2026-11-02 另跑；**GPU 五行的 perf/mem 也已于 2026-11-02 全部跑完**（第 1 行此前已闭环）。第 1 行那三组 GPU 必跑已经做完。
+每份导出后写入 `/workspace/npu_load_1000/<名>/mae.txt`，六份都已抄到 `docs/npu_baseline/`。队列已于 18:26 UTC 结束。第 2① with_cp 的 NPU 性能/单卡内存已于 2026-11-02 另跑；**GPU / NPU 五行 perf/mem 均已于 2026-11-02 闭环**（第 1 行此前已闭环）。
 
 ## 和旧段落的关系
 

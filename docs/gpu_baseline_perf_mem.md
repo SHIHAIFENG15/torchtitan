@@ -144,7 +144,7 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 
 ## 尚未覆盖 / GPU 待跑
 
-配方已扩展到第 2①②③、4、5 行（及 Dist-MoE 仅 NPU）。**GPU 侧完整必跑清单与命令**见 [`docs/gpu_agent_perf_mem_todo.md`](gpu_agent_perf_mem_todo.md)。第 1 行 GPU 已闭环；**第 2①②③、4、5 行 GPU 已于 2026-11-02 跑完（见下）**，判定等 NPU 对应行填数。
+配方已扩展到第 2①②③、4、5 行（及 Dist-MoE 仅 NPU）。**GPU 侧完整必跑清单与命令**见 [`docs/gpu_agent_perf_mem_todo.md`](gpu_agent_perf_mem_todo.md)。第 1 行及第 2①②③、4、5 行 GPU/NPU perf/mem 已于 2026-11-02 闭环（见下表）。
 
 ## GPU 实测结果（2026-11-02，HEAD `75c46f03` + 本分支新配方，容器 `gpu-z00824525-tt`，独占 8 卡）
 
@@ -153,18 +153,18 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 | 行 | CONFIG（4 卡 / 8 卡） | 4 卡稳定 tps | 8 卡稳定 tps | GPU 线性度 | NPU 线性度 | 差（百分点） | 性能判定 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2① | `with_cp_perf_dp1` / `_perf_dp2` | 485.99 | 478.41 | 0.9844 | 0.9709 | 1.35 | **达标** |
-| 2② | `fsdp2_cp2_ep4_perf_dp2` / `_perf_dp4` | 335.02 | 324.08 | 0.9673 | 待 NPU | 待 | 待 NPU |
-| 2③ | `mm_fsdp2_tp2_cp2_ep4_perf_dp1` / `_perf_dp2` | 134.18 | 109.40 | 0.8153 | 待 NPU | 待 | 待 NPU（视觉长度重编译掉速步已按协议剔除，150 步取 step>100 共 50 步） |
-| 4 | `debugmodel_mm_perf_dp1` / `_perf_dp2` | 374.36 | 358.08 | 0.9565 | 待 NPU | 待 | 待 NPU |
-| 5 | `ultradata_lora_sft_perf_dp1` / `_perf_dp2`（120 步） | 10230.50 | 9874.95 | 0.9652 | 待 NPU | 待 | 待 NPU（tps 计量口径与第 1 行不同，不可跨行比较） |
+| 2② | `fsdp2_cp2_ep4_perf_dp2` / `_perf_dp4` | 335.02 | 324.08 | 0.9673 | 0.9556 | 1.17 | **达标** |
+| 2③ | `mm_fsdp2_…_perf_dp1` / `_perf_dp2` | 134.18 | 109.40 | 0.8153 | 0.8106 | 0.47 | **达标** |
+| 4 | `debugmodel_mm_perf_dp1` / `_perf_dp2` | 374.36 | 358.08 | 0.9565 | 0.9696 | 1.31 | **达标** |
+| 5 | `ultradata_…_perf_dp1` / `_perf_dp2`（120 步） | 10230.50 | 9874.95 | 0.9652 | 0.8990 | 6.62 | **不达标** |
 
-| 行 | GPU 单卡 memory (step2–20) | GPU 4 卡 memory (step>100 末值) | NPU 单卡 / 4 卡 | 内存判定 |
+| 行 | GPU 单卡 memory (step2–20) | GPU 4 卡 memory | NPU 单卡 / 4 卡 | 内存判定 |
 | --- | --- | --- | --- | --- |
-| 2① | 1.47–3.85（随步爬升，末 3.85） | 0.65 | 0.25 / 0.10 | **不达标**（GPU 预留显著更高且随步爬升） |
-| 2② | 1.46–3.85（随步爬升，末 3.85） | 0.49 | 待 NPU | 待 NPU |
-| 2③ | 2.39–14.15（随步爬升，末 14.15） | 2.24 | 待 NPU | 待 NPU |
-| 4 | 2.34–14.15（随步爬升，末 14.15） | 3.19 | 待 NPU | 待 NPU |
-| 5 | 0.24–0.54（随步爬升，末 0.54） | 0.44 | 待 NPU | 待 NPU |
+| 2① | 1.47–3.85（末 3.85，爬升） | 0.65 | 0.25 / 0.10 | **不达标** |
+| 2② | 1.46–3.85（末 3.85，爬升） | 0.49 | 0.25 / 0.12 | **不达标** |
+| 2③ | 2.39–14.15（末 14.15，爬升） | 2.24 | 0.28 / 0.15 | **不达标** |
+| 4 | 2.34–14.15（末 14.15，爬升） | 3.19 | 0.28 / 0.15 | **不达标** |
+| 5 | 0.24–0.54（末 0.54，爬升） | 0.44 | 13.25 / 4.32 | **不达标**（本行是 NPU 预留更高） |
 
 日志（`logs/`）：`with_cp_mem_1device_gpu.log`、`with_cp_perf_dp1_gpu.log`、`with_cp_perf_dp2_gpu.log`、`fsdp2_mem_1device_gpu.log`、`fsdp2_perf_dp2_gpu.log`、`fsdp2_perf_dp4_gpu.log`、`mm_fsdp2_mem_1device_gpu.log`、`mm_fsdp2_perf_dp1_gpu.log`、`mm_fsdp2_perf_dp2_gpu.log`、`mm_mem_1device_gpu.log`、`mm_perf_dp1_gpu.log`、`mm_perf_dp2_gpu.log`、`ultradata_mem_1device_gpu.log`、`ultradata_perf_dp1_gpu.log`、`ultradata_perf_dp2_gpu.log`。
 
@@ -215,3 +215,5 @@ GPU 请用同一三个 CONFIG 按上文命令跑完，填表后再算百分点�
 - `logs/perf_dp4_gpu_r2.log`（成功，采用其数据；运行期间监控确认无外部任务）
 
 说明：A100 (NVLink) 上 8 卡相对 4 卡的吞吐比 0.92，低于 NPU 的 0.95；差值 3.2 个百分点超出 2 个百分点阈值，按协议如实记为不达标。若需复测，建议在独占时段重跑 `perf_dp4`。
+
+NPU 第 5 行 8 卡定稿日志：`logs/ultradata_perf_dp2_npu.ep8.log`（后续同名 `ultradata_perf_dp2_npu.log` 若被覆盖重跑，验收以 ep8 定稿为准）。
