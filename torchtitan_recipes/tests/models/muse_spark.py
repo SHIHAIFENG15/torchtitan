@@ -575,6 +575,7 @@ def _use_released_tokenizer_with_debug_model(config: Trainer.Config) -> None:
 def muse_spark_debugmodel_ultradata_lora_sft(
     *,
     data_parallel_shard_degree: int = 2,
+    expert_parallel_degree: int = 8,
     steps: int = 10,
 ) -> Trainer.Config:
     """Configure UltraData LoRA SFT with a debug model (default 8 GPUs, 10 steps)."""
@@ -604,7 +605,7 @@ def muse_spark_debugmodel_ultradata_lora_sft(
         data_parallel_shard_degree=data_parallel_shard_degree,
         tensor_parallel_degree=2,
         context_parallel_degree=2,
-        expert_parallel_degree=8,
+        expert_parallel_degree=expert_parallel_degree,
         pipeline_parallel_degree=1,
         enable_sequence_parallel=True,
         context_parallel_load_balancer=None,
@@ -623,6 +624,8 @@ def muse_spark_debugmodel_ultradata_lora_sft_perf_dp1() -> Trainer.Config:
     """
     config = muse_spark_debugmodel_ultradata_lora_sft(
         data_parallel_shard_degree=1,
+        # 4-card world is dp_shard 1 x cp 2 x tp 2 = 4; EP must divide it.
+        expert_parallel_degree=4,
         steps=120,
     )
     config.comm.init_timeout_seconds = 1800

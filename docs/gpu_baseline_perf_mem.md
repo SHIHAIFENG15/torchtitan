@@ -132,19 +132,45 @@ NGPU=1 MODULE=torchtitan_recipes.tests.models.muse_spark \
 
 | 端 | 4 卡稳定 tps (step>100) | 8 卡稳定 tps (step>100) | 线性度 | 与对端差（百分点） | 结论 |
 | --- | --- | --- | --- | --- | --- |
-| NPU | 148.53 | 144.21 | 0.9709 | | 待 GPU |
-| GPU | | | | | 未跑 |
+| NPU | 148.53 | 144.21 | 0.9709 | 1.35 | 已对齐，判定见 GPU 行 |
+| GPU | 485.99 | 478.41 | 0.9844 | 1.35 | **达标**（1.35 ≤ 2 阈值） |
 
 | 端 | 单卡稳定 memory (GiB) | 4 卡稳定 memory (GiB) | 结论 |
 | --- | --- | --- | --- |
-| NPU | 0.25 | 0.10 | 待 GPU |
-| GPU | | | 未跑 |
+| NPU | 0.25 | 0.10 | 已对齐，判定见 GPU 行 |
+| GPU | 1.47–3.85（随步爬升，无稳定值，末步 3.85） | 0.65（step>100 末值） | **不达标**（GPU 日志预留显著高于 NPU：单卡约 6–15×、4 卡约 6.5×；GPU 端预留随步爬升，疑似 allocator 预留增长或内核实现差异，建议 allocator 行为核查后复测） |
 
-日志：`logs/with_cp_perf_dp1_npu.log`、`logs/with_cp_perf_dp2_npu.log`、`logs/with_cp_mem_1device_npu.log`。
+日志：`logs/with_cp_perf_dp1_npu.log`、`logs/with_cp_perf_dp2_npu.log`、`logs/with_cp_mem_1device_npu.log`；GPU：`logs/with_cp_perf_dp1_gpu.log`、`logs/with_cp_perf_dp2_gpu.log`、`logs/with_cp_mem_1device_gpu.log`。
 
 ## 尚未覆盖 / GPU 待跑
 
-配方已扩展到第 2①②③、4、5 行（及 Dist-MoE 仅 NPU）。**GPU 侧完整必跑清单与命令**见 [`docs/gpu_agent_perf_mem_todo.md`](gpu_agent_perf_mem_todo.md)。第 1 行 GPU 已闭环；其余行等 GPU 填数后再改验收判定。
+配方已扩展到第 2①②③、4、5 行（及 Dist-MoE 仅 NPU）。**GPU 侧完整必跑清单与命令**见 [`docs/gpu_agent_perf_mem_todo.md`](gpu_agent_perf_mem_todo.md)。第 1 行 GPU 已闭环；**第 2①②③、4、5 行 GPU 已于 2026-11-02 跑完（见下）**，判定等 NPU 对应行填数。
+
+## GPU 实测结果（2026-11-02，HEAD `75c46f03` + 本分支新配方，容器 `gpu-z00824525-tt`，独占 8 卡）
+
+环境与第 1 行相同（`CUBLAS_WORKSPACE_CONFIG=:4096:8`、`TORCH_DEVICE_BACKEND_AUTOLOAD=1`、`MUSE_DEBUG_DETERMINISTIC=1`）。15 次运行全部 `Training completed`，无 `ChildFailedError`。逐次顺序执行，一次只跑一个 torchrun。
+
+| 行 | CONFIG（4 卡 / 8 卡） | 4 卡稳定 tps | 8 卡稳定 tps | GPU 线性度 | NPU 线性度 | 差（百分点） | 性能判定 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2① | `with_cp_perf_dp1` / `_perf_dp2` | 485.99 | 478.41 | 0.9844 | 0.9709 | 1.35 | **达标** |
+| 2② | `fsdp2_cp2_ep4_perf_dp2` / `_perf_dp4` | 335.02 | 324.08 | 0.9673 | 待 NPU | 待 | 待 NPU |
+| 2③ | `mm_fsdp2_tp2_cp2_ep4_perf_dp1` / `_perf_dp2` | 134.18 | 109.40 | 0.8153 | 待 NPU | 待 | 待 NPU（视觉长度重编译掉速步已按协议剔除，150 步取 step>100 共 50 步） |
+| 4 | `debugmodel_mm_perf_dp1` / `_perf_dp2` | 374.36 | 358.08 | 0.9565 | 待 NPU | 待 | 待 NPU |
+| 5 | `ultradata_lora_sft_perf_dp1` / `_perf_dp2`（120 步） | 10230.50 | 9874.95 | 0.9652 | 待 NPU | 待 | 待 NPU（tps 计量口径与第 1 行不同，不可跨行比较） |
+
+| 行 | GPU 单卡 memory (step2–20) | GPU 4 卡 memory (step>100 末值) | NPU 单卡 / 4 卡 | 内存判定 |
+| --- | --- | --- | --- | --- |
+| 2① | 1.47–3.85（随步爬升，末 3.85） | 0.65 | 0.25 / 0.10 | **不达标**（GPU 预留显著更高且随步爬升） |
+| 2② | 1.46–3.85（随步爬升，末 3.85） | 0.49 | 待 NPU | 待 NPU |
+| 2③ | 2.39–14.15（随步爬升，末 14.15） | 2.24 | 待 NPU | 待 NPU |
+| 4 | 2.34–14.15（随步爬升，末 14.15） | 3.19 | 待 NPU | 待 NPU |
+| 5 | 0.24–0.54（随步爬升，末 0.54） | 0.44 | 待 NPU | 待 NPU |
+
+日志（`logs/`）：`with_cp_mem_1device_gpu.log`、`with_cp_perf_dp1_gpu.log`、`with_cp_perf_dp2_gpu.log`、`fsdp2_mem_1device_gpu.log`、`fsdp2_perf_dp2_gpu.log`、`fsdp2_perf_dp4_gpu.log`、`mm_fsdp2_mem_1device_gpu.log`、`mm_fsdp2_perf_dp1_gpu.log`、`mm_fsdp2_perf_dp2_gpu.log`、`mm_mem_1device_gpu.log`、`mm_perf_dp1_gpu.log`、`mm_perf_dp2_gpu.log`、`ultradata_mem_1device_gpu.log`、`ultradata_perf_dp1_gpu.log`、`ultradata_perf_dp2_gpu.log`。
+
+配方修正：`muse_spark_debugmodel_ultradata_lora_sft_perf_dp1` 原样在 4 卡上触发 `ValueError: expert_parallel_degree (8) must divide dp_shard * cp * tp (4)`——基函数 `expert_parallel_degree=8` 硬编码且未随卡数折减。已改为基函数新增 `expert_parallel_degree: int = 8` 参数、`perf_dp1` 传 4（4 整除 dp_shard×cp×tp=4，与 8 卡"全卡 EP"语义一致）；8 卡路径数值不变。NPU 侧队列脚本同配置同参数，拉取本修复后其 4 卡档才能通过。
+
+内存记数说明：GPU 端各 mem_1device 日志的 `memory` 普遍随步单调爬升（缓存预留增长），与 NPU 侧平稳值不同口径，按协议如实记录区间与末值；达标判定待两侧口径确认后复核。
 
 ## NPU 实测结果（2026-10-31，`e8bd720c`+超时补丁，容器 `npu-y00839695-torchtitan-20261028`）
 

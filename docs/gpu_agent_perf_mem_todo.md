@@ -1,5 +1,7 @@
 # GPU agent 任务：Muse Spark 性能 / 内存对照
 
+**GPU 已于 2026-11-02 完成本文件全部必跑清单（第 2①②③、4、5 行共 15 次，全部 `Training completed`）；数据与判定见 `docs/gpu_baseline_perf_mem.md`「GPU 实测结果（2026-11-02）」节与 `docs/npu_gpu_acceptance_report.md`。配方修正一条：`ultradata_lora_sft_perf_dp1` 在 4 卡触发 EP 校验错误，已给基函数加 `expert_parallel_degree` 参数（4 卡传 4，8 卡路径不变）。**
+
 给 `node-5-15`（或同等 **8×A100-80GB**）上的另一个 agent / 执行者。
 
 NPU 侧已在 `179.173.2.3` 容器 `npu-y00839695-torchtitan-20261028` 上按协议补跑（或正在跑）各行 perf/mem。本文件只列 **GPU 还必须跑的同 CONFIG**，跑完才能和 NPU 比线性度与内存并改验收判定。
@@ -213,5 +215,3 @@ print("completed", "Training completed" in text)
 PY
 logs/with_cp_perf_dp1_npu.log
 ```
-
-精度曲线复验（2③ / 第 4 行）见 `docs/gpu_agent_precision_reverify_todo.md`。
