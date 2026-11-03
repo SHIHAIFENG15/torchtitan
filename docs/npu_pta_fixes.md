@@ -51,17 +51,18 @@
 | # | 现象 / 失败 | 根因（一句话） | 改动落点 | 详情 |
 | --- | --- | --- | --- | --- |
 | 1 | RoPE / 视觉 RoPE `aclnnIndex` complex64 | 910B index 无 complex64 | `rope.py` / `vision_encoder.py` NPU `view_as_real` | [§1](#1-rope-用-complex64-做下标)、[§6](#6-视觉-rope-的-complex64-下标) |
-| 2 | SwiGLU / Helion CUDA 路径在 NPU 挂 | 融合 override 绑 CUDA | 非 CUDA `silu(gate)*up`；with_cp 清空 override | [§3](#3-融合-swiglu-没有-npu-实现) |
-| 3 | flex 反向多 rank 选块段错误 | 并行选块竞态 | 反向分块默认 16；autotune 文件锁 | [§4](#4-flex-attention-反向在-910b4-上段错误)、[§8](#8-8-个-rank-同时给-flex-attention-反向选块) |
-| 4 | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；`train_timeout=1800` | [§9](#9-短视觉序列的-flex-decoding-和-100-秒超时) |
-| 5 | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§4](#4-flex-attention-反向在-910b4-上段错误) |
-| 6 | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§10](#10-词表断言和-fsdp-的-view-输出) |
-| 7 | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§10](#10-词表断言和-fsdp-的-view-输出) |
-| 8 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | commit `d0f5101f` |
-| 9 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§12](#12-dist-moe-bf16-在-910b-上的专家计算) |
-| 10 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | `f1c0e844` |
-| 11 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
-| 12 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
+| 2 | packed-document mask：`Buffers cannot be created` / mask-out 编不过 | 间接 index 走 fallback 开临时 buffer；910B4 mask-out 核编挂 | `flex_attention.py.patch`：逐点 index + 非 950 关 mask-out | [§2](#2-packed-document-mask-的间接-index-与-mask-out) |
+| 3 | SwiGLU / Helion CUDA 路径在 NPU 挂 | 融合 override 绑 CUDA | 非 CUDA `silu(gate)*up`；with_cp 清空 override | [§3](#3-融合-swiglu-没有-npu-实现) |
+| 4 | flex 反向多 rank 选块段错误 | 并行选块竞态 | 反向分块默认 16；autotune 文件锁 | [§4](#4-flex-attention-反向在-910b4-上段错误)、[§8](#8-8-个-rank-同时给-flex-attention-反向选块) |
+| 5 | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；`train_timeout=1800` | [§9](#9-短视觉序列的-flex-decoding-和-100-秒超时) |
+| 6 | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§4](#4-flex-attention-反向在-910b4-上段错误) |
+| 7 | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§10](#10-词表断言和-fsdp-的-view-输出) |
+| 8 | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§10](#10-词表断言和-fsdp-的-view-输出) |
+| 9 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | commit `d0f5101f` |
+| 10 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§12](#12-dist-moe-bf16-在-910b-上的专家计算) |
+| 11 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | `f1c0e844` |
+| 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
+| 13 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
 
 ### 未做 / 不可做
 
