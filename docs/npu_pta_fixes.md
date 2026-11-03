@@ -250,12 +250,27 @@ HCCL watchdog 把还在集合通信里的 rank 打成 SIGABRT（exit -6）。`Nu
 | `TORCHINDUCTOR_COMPILE_THREADS` | PyTorch Inductor | 编译子进程池大小 |
 | `TORCHNPU_PRECOMPILE_THREADS` | `torch_npu` | NPU 侧预编译 / 选配置时的并行度（默认往往 ≥32） |
 
-### 问题
+### 问题：为什么说「段错误」
 
-§4 把反向 tile 钉成 16 之后，前几步能跑了，但后面某个 step 仍可能崩：日志出现 `SubprocPool unclean exit`——**编译子进程异常退出**。  
-更重的一例：`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 flex 反向选块时，`TORCHNPU_PRECOMPILE_THREADS` 一侧开到约 128 个工人去测几十组配置，rank 0 **段错误**。
+这里的崩**不是** Python 抛了个 `Exception`，而是底层原生代码（编译器 / 驱动 / 子进程里的 C/C++）访问非法内存，进程被操作系统干掉：
 
-和 §4「多 rank 文件锁」不同：§4 管的是 **多个训练进程（rank）** 不要同时选块；本节管的是 **单个 rank 内部** 不要用一大坨编译工人并行干活。910B4 上这套多工人编译/预编译不稳。
+- 常见表现：`SIGSEGV`、exit `-11`，或日志 `SubprocPool unclean exit`（编译**子进程**先死了，主进程只看到池子不干净退出）
+- Python 栈往往没有有用的业务报错，所以不像「哪里写错公式」那么好读
+
+§4 把反向 tile 钉成 16 之后，前几步能跑了，但后面某个 step 在**并行编译/并行试配置**时仍可能这样死。更重的一例：`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 flex 反向选块时，`TORCHNPU_PRECOMPILE_THREADS` 开到约 128 个工人去测几十组配置，rank 0 段错误。
+
+### 和「公式错了」的差别
+
+我们**没有**追到「某一行 NPU 编译器源码必现 bug」的精确定位。现有结论是对照实验：
+
+| 做法 | 结果 |
+| --- | --- |
+| 编译/预编译工人很多（默认或上百） | 编 flex 相关核时易段错误 / SubprocPool 异常退出 |
+| 两套线程都设为 1，串行编 | 同样配方能跑完 |
+
+也就是说：崩发生在**并行编译这条路径**上；改成串行就避开。可能原因包括（推断，非已证明）：多线程同时调同一套编译器/设备库线程不安全、多个子进程同时占编译资源互踩等。本节不宣称已定位到其中哪一种。
+
+和 §4「多 rank 文件锁」不同：§4 管的是 **多个训练进程（rank）** 不要同时选块；本节管的是 **单个 rank 内部** 不要用一大坨编译工人并行干活。
 
 ### 改法
 
@@ -266,11 +281,11 @@ export TORCHINDUCTOR_COMPILE_THREADS=1
 export TORCHNPU_PRECOMPILE_THREADS=1
 ```
 
-效果：编译和预编译改在**当前训练进程里串行做**，不再拉一堆子进程/线程并行试。编得慢一些，但 `muse_spark_debugmodel` 能跑完 10 步。
+效果：编译和预编译改在**当前训练进程里串行做**，不再拉一堆子进程/线程并行试。编得慢一些，但能避开上述并行编译路径上的崩溃，`muse_spark_debugmodel` 可跑完 10 步。
 
 ### 边界
 
-这是环境变量，不是改 flex 公式。训练前需要 `source docs/npu_910b_patches/env_npu_910b.sh`（或等价写入容器 env）。
+这是环境变量级的**规避**，不是改 flex 数学，也不是已向上游提交的编译器根治补丁。训练前需要 `source docs/npu_910b_patches/env_npu_910b.sh`（或等价写入容器 env）。
 
 ## 7. 词表断言在编译期跳过
 
