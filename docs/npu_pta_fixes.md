@@ -64,7 +64,7 @@
 | 8 | | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view（FSDP 通用坑，非仅 910B） | `contiguous()` | [§8](#8-视觉-encoder-输出-contiguous) |
 | 9 | | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | [§9](#9-init-timeout-保持-300) |
 | 10 | | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§10](#10-dist-moe-bf16-在-910b-上的专家计算) |
-| 11 | | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | [§11](#11-dist-moe--fsdp-policy-软导入) |
+| 11 | | Dist-MoE / FSDP 在旧 torch 上 import 或构造直接报错 | 代码假定新 API 一定存在 | 没有则跳过/不传该参数 | [§11](#11-旧-torch-上-dist-moe--fsdp-的兼容导入) |
 | 12 | Y | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§12](#12-上下文并行的-block-mask-求和被编成-simt_only) |
 | 13 | | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
 
@@ -83,6 +83,31 @@
 | --- | --- |
 | `docs/npu_910b_patches/` | flex/heuristics 可复用补丁 |
 | `docs/npu_debugmodel_verification.md` | 按清单行跑通记录（非四项验收） |
+
+### 本分支（`npu-muse-spark-r04-code-fixes`）代码落点
+
+上表 **#1–#13 的对应改动都在本分支**。形态分两类：本仓 Python / 配置，以及需打进当前环境的 site-packages 补丁与环境变量。
+
+| # | 在本分支？ | 落点形态（检出后还要做什么） |
+| --- | --- | --- |
+| 1 | 是 | 本仓：`rope.py` / `vision_encoder.py` |
+| 2 | 是 | 补丁：`docs/npu_910b_patches/flex_attention.py.patch`（需 `apply_npu_910b_patches.sh`） |
+| 3 | 是 | 本仓：`torchtitan_recipes/overrides/fused_swiglu.py` |
+| 4 | 是 | 补丁：`flex_attention.py.patch` + `triton_heuristics.py.patch`（需 apply） |
+| 5 | 是 | 补丁关 flex decoding + 本仓配方 `train_timeout_seconds=1800` |
+| 6 | 是 | 环境变量：`docs/npu_910b_patches/env_npu_910b.sh`（需 `source`） |
+| 7 | 是 | 本仓：`torchtitan/components/loss.py` |
+| 8 | 是 | 本仓：`vision_encoder.py` 的 `contiguous()` |
+| 9 | 是 | 本仓：`CommConfig.init_timeout_seconds` 默认 300 |
+| 10 | 是 | 本仓：`dist_moe/npu.py` 等（`fc3aa0cf`） |
+| 11 | 是 | 本仓：`dist_moe/runtime.py`、`distributed/fsdp.py`（`f1c0e844`） |
+| 12 | 是 | 补丁：`triton_heuristics.py.patch`（需 apply） |
+| 13 | 是 | 本仓：`muse_spark.py` 等多模态配方 `train_timeout_seconds=1800` |
+
+**#2 / #4 / #5（decoding）/ #6 / #12**：只拉分支不够，还要 apply 补丁并 source 环境变量，才会进当前 Python 的 `torch_npu`。  
+**不在本分支**（也不应合入本 PR）：E1 本地 UltraData JSONL；A1–A3（属 `torchtitan-ascend`）。
+
+相对上游 `release/0.4` 开 PR 时，应能在同一 PR 里看到本文档与上表所列本仓代码及 `docs/npu_910b_patches/`。
 
 ---
 
@@ -376,7 +401,7 @@ return torch.cat(outputs).contiguous()
 
 | 配方 | 含义 | 本分支 |
 | --- | --- | --- |
-| `muse_spark_debugmodel_dist_moe_bf16` | Dist-MoE + bf16 | **已做 NPU 旁路，可跑通** |
+| `muse_spark_debugmodel_dist_moe_bf16` | Dist-MoE + bf16 | **已接 NPU 专用路径，可跑通** |
 | `muse_spark_debugmodel_dist_moe_mxfp8` | Dist-MoE + mxfp8（工作项里的「压缩 MoE」挂在这条） | **未改、未跑** |
 
 官方 Dist-MoE 走 CUDA 包（`dist_moe` / CuTe），并检查「必须是 CUDA 且算力 ≥ SM100」。910B 是 `device.type == "npu"`，过不了这道门。
@@ -387,11 +412,13 @@ return torch.cat(outputs).contiguous()
 ValueError: Dist-MoE requires an SM100-or-newer CUDA device
 ```
 
-即使装上可选包，910B 也不是 CUDA SM100，官方路径仍不可用。需要在 **torchtitan 里给 NPU 单独旁路**（`fc3aa0cf`），不改 site-packages；CUDA 仍走原来的包和检查。
+即使装上可选包，910B 也不是 CUDA SM100，官方路径仍不可用。需要在 **torchtitan 里给 NPU 另写一套实现**（`fc3aa0cf`），训练时走这套，而不是官方 CUDA 包；不改 site-packages。CUDA 机器仍走原来的包和检查。
 
-### 改法（bf16 / NPU 旁路，按数据流）
+下文说的「NPU 专用路径」就是这个意思：和官方 CUDA Dist-MoE **并列的一条软件分支**，不是硬件旁路。
 
-整体：在 NPU 上 **不调用** `dist_moe.create_context`，改走本仓实现。
+### 改法（bf16 / NPU 专用路径，按数据流）
+
+整体：在 NPU 上 **不调用** `dist_moe.create_context`，改走本仓 `npu.py` 等实现。
 
 1. **入口**：`routed_experts` 发现张量在 `npu` 上 → 调 `npu_dist_moe_forward`（包在 remat 的 SAVE 区域 `dist_moe` 里，`recompute=False`）。
 2. **上下文**：用轻量 `_NpuDistMoeContext`（`select_activation_slot` / `reset` / `close` 等），只满足流水线注册需要。
@@ -401,7 +428,7 @@ ValueError: Dist-MoE requires an SM100-or-newer CUDA device
    - Token 交换：复用已有 `AllToAllTokenDispatcher` 的 `_dispatch` / `_combine`（不是另一套 NPU distribute API）
 4. **配方**：`disable_cuda_graphs=True`（910B 无 CUDA graph）；适当收 `local_compile_regions`；`train_timeout_seconds=1800`。网格仍是 4 卡 `dp_shard=2, tp=2, ep=2`。
 
-### 问题 2：旁路接通后，remat 区域嵌套报错
+### 问题 2：NPU 路径接通后，remat 区域嵌套报错
 
 第一次 4 卡启动还没 step：
 
@@ -415,15 +442,31 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 
 ### mxfp8 / 压缩 MoE（未做）
 
-`dist_moe_mxfp8` 在配置期就要官方 `BlockScaledConfig` 等，NPU 旁路未接。没有第三条独立「压缩 MoE」配方。本次 **未改、未跑**。
+`dist_moe_mxfp8` 在配置期就要官方 `BlockScaledConfig` 等，NPU 专用路径未接。没有第三条独立「压缩 MoE」配方。本次 **未改、未跑**。
 
 ### 验证
 
 2026-10-30，`NGPU=4`、确定性开关打开，同一 bf16 配置连跑两次，10 步 loss / grad_norm 对齐。见 `docs/npu_debugmodel_verification.md` 第 3 行。
 
-## 11. Dist-MoE / FSDP policy 软导入
+## 11. 旧 torch 上 Dist-MoE / FSDP 的兼容导入
 
-可选依赖 `dist_moe` / 部分 FSDP `MixedPrecisionPolicy` 在已装 torch 上导入过硬时，训练在配置阶段直接失败。`f1c0e844` 改为软探测：导入失败则跳过对应路径，避免无包或 API 不齐时整段起不来。
+这和 §10「NPU 上怎么算 Dist-MoE」不是一回事：这里只解决 **一 import / 一构造就报错**，训练还没真正跑起来。
+
+### 问题
+
+本机 torch 若比上游新接口旧，会出现：
+
+- Dist-MoE 文件开头直接 `from torch.distributed.pipelining import analyze_pipeline_activation_liveness, ...`，旧版没有这些名字 → **`ImportError`，模块加载失败**
+- FSDP 创建 `MixedPrecisionPolicy(..., param_dtype_override_fn=...)`，旧版不接受这个参数 → **构造时报错**
+
+### 改法（`f1c0e844`）
+
+- Dist-MoE：用 `try/except ImportError`；导入失败就把相关名字设成 `None`，文件仍能被 import。
+- FSDP：先看当前 `MixedPrecisionPolicy.__init__` 有哪些参数；有 `param_dtype_override_fn` 才传入。调用方确实需要该能力而当前 torch 没有时，再明确报错提示升级 torch。
+
+### 边界
+
+缺 API 时对应高级功能仍不可用；只是不再因为缺一两个符号就整段起不来。真正跑 Dist-MoE bf16 仍靠 §10。
 
 ## 12. 上下文并行的 block mask 求和被编成 simt_only
 
