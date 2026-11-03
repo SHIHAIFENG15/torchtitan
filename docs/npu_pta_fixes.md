@@ -289,15 +289,76 @@ export TORCHNPU_PRECOMPILE_THREADS=1
 
 ## 7. 词表断言在编译期跳过
 
-`torchtitan/components/loss.py` 里，`_LossParallelCrossEntropy` 的 `torch._assert_async` 在 `torch.compiler.is_compiling()` 时跳过。910B 的 inductor 编不出这个 0 维 device 断言，会停在编译里。eager 时检查还在。
+### 在干什么
+
+算 loss 前，代码会检查 labels 是否合法（是 `IGNORE_INDEX`，或落在词表范围内）。检查用的是 `torch._assert_async(...)`：在设备上异步断言，失败时再报错。
+
+### 问题
+
+这段 loss 会进 `torch.compile`。910B 的 Inductor **编不出**这种 0 维 device 上的 `_assert_async`，编译阶段会卡住/挂住，训练走不下去。不是 labels 真的错了，是**断言这个算子本身在 910B 上编不过**。
+
+### 改法
+
+`torchtitan/components/loss.py` 里包一层：
+
+- **正在 compile**（`torch.compiler.is_compiling()` 为真）→ 跳过 `_assert_async`
+- **普通 eager 跑** → 照旧做断言
+
+这样编译能过；平时不 compile 时检查还在。
+
+### 边界
+
+只跳过「编译期」的断言，不关掉 eager 检查；不改 loss 计算公式。
 
 ## 8. 视觉 encoder 输出 contiguous
 
-`NaViTEncoder.forward` 末尾，单帧时 `torch.cat` 返回的就是那一帧，FSDP 把它看成 view，就地算子会丢掉 pre-backward all-gather。返回值改成 `torch.cat(outputs).contiguous()`。音频编码器和文本 block 的同类警告这次没有改调用点。
+### 在干什么
+
+`NaViTEncoder` 前向最后把各帧结果 `torch.cat` 拼成一块，交给后面的 FSDP 等模块。FSDP 在反向前需要对自己管理的参数做 **all-gather**；若模块输出只是别的张量的 **view**（共享同一块存储、不是独立连续块），某些就地（in-place）算子会破坏 FSDP 的约定，导致 **pre-backward all-gather 被丢掉**，数值/通信会错。
+
+### 问题
+
+只有 **一帧** 时，`torch.cat([那一帧])` 往往直接返回原张量本身，在 FSDP 眼里就是 view，不满足「模块输出应是独立存储」的预期。
+
+### 改法
+
+返回改成：
+
+```python
+return torch.cat(outputs).contiguous()
+```
+
+`contiguous()` 保证得到一块连续、独立的存储，FSDP 不再把输出当成危险的 view。
+
+### 边界
+
+这次只改了视觉 encoder 这一处。音频编码器、文本 block 上若有同类警告，本轮未改。
 
 ## 9. init timeout 保持 300
 
-曾把全局 `init_timeout_seconds` 也抬到 1800，启动阶段过猛。`d0f5101f` 起默认 init 超时保持 300；需要盖住首步 flex 编译的 1800 只写在具体配方的 `train_timeout_seconds`（以及个别配方的 `init_timeout_seconds`）里。
+### 在干什么
+
+分布式有两类通信超时：
+
+| 字段 | 管什么 | 默认（现） |
+| --- | --- | --- |
+| `init_timeout_seconds` | **建进程组、初始化、第一步同步** 等启动阶段 | **300** 秒 |
+| `train_timeout_seconds` | **第 1 步之后** 训练中的集合通信 | 默认 100；部分 NPU 配方写成 **1800** |
+
+### 问题
+
+为了盖住 flex 首步/变长重编译，有人曾把 **全局默认** `init_timeout_seconds` 也改成 1800。启动阶段其实用不了那么久；默认抬太高会让「进程组没起来 / 卡在 init」时干等很久才报错，排查变慢。真正需要长超时的是 **训练中** 的 all-gather 等（见 §5 / §13），不该和 init 绑死成同一个全局默认。
+
+### 改法
+
+`d0f5101f`：`CommConfig.init_timeout_seconds` 默认改回 **300**。需要 1800 的场景写在具体配方上：
+
+- 多数：只加长 `train_timeout_seconds=1800`
+- 个别配方若首步前也要更长，再单独设自己的 `init_timeout_seconds`
+
+### 边界
+
+这是配置分层，不是改通信算法。§5 / §13 的 1800 仍然必要，只是不要污染全局 init 默认值。
 
 ## 10. Dist-MoE bf16 在 910B 上的专家计算
 
