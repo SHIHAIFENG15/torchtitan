@@ -316,17 +316,22 @@ def _use_released_tokenizer_with_debug_model(config: Trainer.Config) -> None:
     loss_config.loss_fn.global_vocab_size = model_config.vocab_size
 
 
-def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
-    """Configure ten-step UltraData LoRA SFT with a debug model on 8 GPUs."""
+def muse_spark_debugmodel_ultradata_lora_sft(
+    *,
+    data_parallel_shard_degree: int = 2,
+    expert_parallel_degree: int = 8,
+    steps: int = 10,
+) -> Trainer.Config:
+    """Configure UltraData LoRA SFT with a debug model (default 8 GPUs, 10 steps)."""
     config = muse_spark_debugmodel_with_cp(seq_len=32_768)
     _use_released_tokenizer_with_debug_model(config)
     config.dataloader = _ultradata_sft_dataloader()
     config.optim = _ultradata_lora_sft_optim(warmup_steps=2)
     config.training = TrainingConfig(
         num_tokens_per_microbatch_per_dp_rank=32_768,
-        num_tokens_per_train_step=65_536,
+        num_tokens_per_train_step=32_768 * data_parallel_shard_degree,
         max_context_length=32_768,
-        steps=10,
+        steps=steps,
         dtype="bfloat16",
         mixed_precision_param="bfloat16",
         mixed_precision_reduce="float32",
@@ -334,10 +339,10 @@ def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
     )
     config.parallelism = ParallelismConfig(
         data_parallel_replicate_degree=1,
-        data_parallel_shard_degree=2,
+        data_parallel_shard_degree=data_parallel_shard_degree,
         tensor_parallel_degree=2,
         context_parallel_degree=2,
-        expert_parallel_degree=8,
+        expert_parallel_degree=expert_parallel_degree,
         pipeline_parallel_degree=1,
         enable_sequence_parallel=True,
         context_parallel_load_balancer=None,
@@ -347,3 +352,28 @@ def muse_spark_debugmodel_ultradata_lora_sft() -> Trainer.Config:
     config.model.local_compile_regions = ["loss"]
     config.debug.seed = 42
     return apply_transforms(config, [_ultradata_lora_sft_transform()])
+
+
+def muse_spark_debugmodel_ultradata_lora_sft_perf_dp1() -> Trainer.Config:
+    """Row-5 throughput baseline: half DP (4 cards), 120 steps.
+
+    32K steps are expensive; 120 still leaves step>100 for the stable mean.
+    """
+    config = muse_spark_debugmodel_ultradata_lora_sft(
+        data_parallel_shard_degree=1,
+        # 4-card world is dp_shard 1 x cp 2 x tp 2 = 4; EP must divide it.
+        expert_parallel_degree=4,
+        steps=120,
+    )
+    config.comm.init_timeout_seconds = 1800
+    return config
+
+
+def muse_spark_debugmodel_ultradata_lora_sft_perf_dp2() -> Trainer.Config:
+    """Row-5 throughput scale-out: checklist 8-card mesh, 120 steps."""
+    config = muse_spark_debugmodel_ultradata_lora_sft(
+        data_parallel_shard_degree=2,
+        steps=120,
+    )
+    config.comm.init_timeout_seconds = 1800
+    return config

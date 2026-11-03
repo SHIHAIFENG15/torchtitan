@@ -43,8 +43,6 @@
 | --- | --- | --- | --- | --- |
 | E1 | UltraData 拉 huggingface 被重置 | 机房出网受限，`huggingface.co:443` 连接重置 | 本地 JSONL：`f99ea981`（`npu-muse-spark-debug-r04`） | [§14](#14-第-5-行改读本地-ultradata-jsonl) |
 
-另：ultradata 4 卡线性度曾踩 `EP=8` 而 `dp*cp*tp=4` 不整除的 `ValueError`——这是**配方网格约束**，不是环境问题；r04 上 `b188a02c` 把 4 卡侧改成 EP4。本 code-fixes 分支无对应改动。
-
 ---
 
 ## 问题 → 改动对照表（本仓 / 补丁目录仍保留）
@@ -64,6 +62,7 @@
 | 11 | 裸 `torchtitan.train` 段错误 / 再撞 make_reduction | 未走 ascend 入口，A 表补丁未生效 | 一律 `torchtitan_ascend.train` | 并见上表 A1–A3 |
 | 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
 | 13 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
+| 14 | ultradata 4 卡默认 EP8 → ValueError | `ep` 须整除 `dp*cp*tp`；4 卡世界为 4 | `perf_dp1` 用 EP4；EP 可传参 | [§15](#15-ultradata-4-卡-ep-须整除世界大小) |
 
 ### 未做 / 不可做
 
@@ -265,10 +264,14 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 
 属上表 **E1**（环境问题，非仓库缺陷）。
 
-对应改动只在 **`npu-muse-spark-debug-r04`**：`f99ea981`（本地 JSONL）。**`npu-muse-spark-r04-code-fixes` 不含该 recipe 改动。**
+对应改动只在 **`npu-muse-spark-debug-r04`**：`f99ea981`（本地 JSONL）。**`npu-muse-spark-r04-code-fixes` 不含该 recipe 改动**；本分支仍走默认 `HuggingFaceStreamingSource`。
 
-`muse_spark_debugmodel_ultradata_lora_sft` 默认走 `HuggingFaceStreamingSource`（`openbmb/UltraData-SFT-Agent-2609`）。本机 `huggingface.co:443` 会被连接重置，流式数据起不来。r04 上 debug 配方改读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN` / 默认本地 JSONL，经 `IndexedJsonlSource` 交给 `_ultradata_sft_dataloader`。JSONL 不进 git（`assets/datasets/`）。
+`muse_spark_debugmodel_ultradata_lora_sft` 默认数据集 `openbmb/UltraData-SFT-Agent-2609`。本机 `huggingface.co:443` 会被连接重置，流式数据起不来。r04 上改读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN` / 本地 JSONL（`IndexedJsonlSource`）。JSONL 不进 git（`assets/datasets/`）。
 
-同波次里 4 卡线性度还曾因默认 `EP=8`、世界大小只有 4（`dp_shard=1, cp=2, tp=2`）触发整除检查失败；那是配方网格问题，r04 用 `b188a02c` 把 4 卡侧改成 EP4，与出网无关。
+## 15. ultradata 4 卡 EP 须整除世界大小
 
-2026-10-30 在 r04 + 本地数据上，`NGPU=8` 连跑两次 10 步可对齐；逐步数字在该分支的 `docs/npu_debugmodel_verification.md` 第 5 行。
+属上表 **#14**（配方代码问题，本分支收录）。
+
+清单第 5 行 8 卡网格是 `dp_shard=2, cp=2, tp=2, ep=8`（`ep` 整除 `dp*cp*tp=8`）。做 4 卡线性度时把 `data_parallel_shard_degree` 改成 1 后，世界大小变成 4，若仍用 `ep=8` 会在并行度校验处 `ValueError`。
+
+本分支：`muse_spark_debugmodel_ultradata_lora_sft` 增加 `expert_parallel_degree` / `data_parallel_shard_degree` 参数；`muse_spark_debugmodel_ultradata_lora_sft_perf_dp1` 显式 `expert_parallel_degree=4`。不改默认 8 卡 10 步配方的 EP。与 E1 出网绕过无关，也不依赖本地 JSONL。
