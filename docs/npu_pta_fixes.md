@@ -61,7 +61,7 @@
 | 5 | Y | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；配方 `train_timeout=1800` | [§5](#5-短视觉序列的-flex-decoding-和-训练超时) |
 | 6 | Y | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§6](#6-编译线程限制为-1) |
 | 7 | | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§7](#7-词表断言在编译期跳过) |
-| 8 | | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§8](#8-视觉-encoder-输出-contiguous) |
+| 8 | | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view（FSDP 通用坑，非仅 910B） | `contiguous()` | [§8](#8-视觉-encoder-输出-contiguous) |
 | 9 | | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | [§9](#9-init-timeout-保持-300) |
 | 10 | | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§10](#10-dist-moe-bf16-在-910b-上的专家计算) |
 | 11 | | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | [§11](#11-dist-moe--fsdp-policy-软导入) |
@@ -370,39 +370,56 @@ return torch.cat(outputs).contiguous()
 
 ## 10. Dist-MoE bf16 在 910B 上的专家计算
 
-清单第 3 行只有两个配方：`muse_spark_debugmodel_dist_moe_bf16`、`muse_spark_debugmodel_dist_moe_mxfp8`。原先 bf16 过不了设备检查：
+### 在干什么
+
+清单第 3 行有两条配方：
+
+| 配方 | 含义 | 本分支 |
+| --- | --- | --- |
+| `muse_spark_debugmodel_dist_moe_bf16` | Dist-MoE + bf16 | **已做 NPU 旁路，可跑通** |
+| `muse_spark_debugmodel_dist_moe_mxfp8` | Dist-MoE + mxfp8（工作项里的「压缩 MoE」挂在这条） | **未改、未跑** |
+
+官方 Dist-MoE 走 CUDA 包（`dist_moe` / CuTe），并检查「必须是 CUDA 且算力 ≥ SM100」。910B 是 `device.type == "npu"`，过不了这道门。
+
+### 问题 1：一上来就被设备检查拦住
 
 ```text
 ValueError: Dist-MoE requires an SM100-or-newer CUDA device
 ```
 
-`torchtitan/models/common/dist_moe/runtime.py` 要求 `device.type == "cuda"` 且计算能力主版本至少 10。910B 的 `device.type` 是 `npu`。可选包 `dist_moe` 和 `torchao` 都没装，装上包也过不了这道检查。
+即使装上可选包，910B 也不是 CUDA SM100，官方路径仍不可用。需要在 **torchtitan 里给 NPU 单独旁路**（`fc3aa0cf`），不改 site-packages；CUDA 仍走原来的包和检查。
 
-**mxfp8**：配置期就会调用 `dist_moe.BlockScaledConfig()`，NPU 旁路未接；工作项里的「压缩 MoE 兼容」挂在 mxfp8 的 `MXFP8LinearConverter` 上，**没有单独第三条配方**。mxfp8（及压缩 MoE 兼容）本次未改、未跑。
+### 改法（bf16 / NPU 旁路，按数据流）
 
-bf16 的改动都在 torchtitan 里（`fc3aa0cf` 已入库），不改 site-packages。CUDA 设备仍走原来的包和 SM100 检查。
+整体：在 NPU 上 **不调用** `dist_moe.create_context`，改走本仓实现。
 
-`runtime.py` 在 NPU 上不再调用 `dist_moe.create_context`。换成 `_NpuDistMoeContext`，只实现 `select_activation_slot`、`reset`、`close`，并记下 `max_num_local_input_tokens`。流水线注册和关闭用的是这几个方法。专家的 scratch 不在这个对象里。
+1. **入口**：`routed_experts` 发现张量在 `npu` 上 → 调 `npu_dist_moe_forward`（包在 remat 的 SAVE 区域 `dist_moe` 里，`recompute=False`）。
+2. **上下文**：用轻量 `_NpuDistMoeContext`（`select_activation_slot` / `reset` / `close` 等），只满足流水线注册需要。
+3. **专家计算**（`dist_moe/npu.py`）：
+   - GEMM：`npu_grouped_matmul`（权重从 `[E,out,in]` 转成算子要的 `[E,in,out]`；FSDP 权重先 `to_local()`）
+   - 激活：普通 SwiGLU 用 `npu_swiglu`；ClampedSwiGLU 仍用 Python 公式（debug 模型是普通 SwiGLU）
+   - Token 交换：复用已有 `AllToAllTokenDispatcher` 的 `_dispatch` / `_combine`（不是另一套 NPU distribute API）
+4. **配方**：`disable_cuda_graphs=True`（910B 无 CUDA graph）；适当收 `local_compile_regions`；`train_timeout_seconds=1800`。网格仍是 4 卡 `dp_shard=2, tp=2, ep=2`。
 
-`routed_experts.py` 在 `x_TD.device.type == "npu"` 时调用 `npu_dist_moe_forward`，包在保存区域 `feed_forward.routed_experts.dist_moe` 里（`recompute=False`）。`num_local_tokens_per_expert_E` 要传进去，不能先 `del`。
+### 问题 2：旁路接通后，remat 区域嵌套报错
 
-`torchtitan/models/common/dist_moe/npu.py` 做三件事：
-
-- 专家 GEMM 用 `npu_grouped_matmul`。权重在模块里是 `[E, out, in]`，调用前转成 `[E, in, out]`。`group_list` 是 int64 前缀和，`split_item=3`、`group_type=0`、`group_list_type=0`。直接传 `[E, out, in]` 会在 `aclnnGroupedMatmulV5` 报 161002。非方阵对照（F=8，2F=16）和 `rows @ W.T` 的最大绝对差是 0.0304，是 bf16 误差。FSDP 权重先 `to_local()`。
-- 激活是普通 SwiGLU 时用 `npu_swiglu`，按最后一维对半，前一半 gate、后一半 up。ClampedSwiGLU 仍走 Python 公式。debug 模型用的是普通 SwiGLU。
-- token 交换用现成的 `AllToAllTokenDispatcher._dispatch` / `_combine`，不是 `npu_moe_distribute_dispatch`。dispatcher 用 `object.__setattr__` 挂在模块上，不进子模块，避免改 CUDA 那条的 state dict 和 FSDP 树。分数仍在 combine 里做加权 scatter-add。
-
-第一次 4 卡启动没有 step，报：
+第一次 4 卡启动还没 step：
 
 ```text
 RuntimeError: remat.region 'dispatch' was called with recompute=True while nested inside a recompute=False (SAVE) region.
 ```
 
-公共 `dispatch()` / `combine()` 会再开默认重算的 `dispatch`、`combine` 区域。外层 `dist_moe` 是保存区域，里面不能再套重算区域。NPU 路径改成直接调 `_dispatch` / `_combine`，元数据在这一层组装，不再开内层区域。
+含义：外层 `dist_moe` 已是「保存、不重算」；公共 `dispatch()` / `combine()` 又会再开默认要重算的内层区域，规则不允许套娃。
 
-`muse_spark_debugmodel_dist_moe_bf16` 在 `_with_dist_moe` 之后把 `disable_cuda_graphs` 设回 True。910B 没有 CUDA graph。`local_compile_regions` 收回 `loss`、`fp32_to_bf16_split`，`train_timeout_seconds=1800`。网格仍是基类的 4 卡 `dp_shard=2, tp=2, ep=2`。
+**改法**：NPU 路径直接调 `_dispatch` / `_combine`，在本层组装元数据，**不再开**内层 remat 区域。
 
-2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=4`，同一配置连跑两次。10 步 loss、grad_norm 逐项相同。逐步数字在 `docs/npu_debugmodel_verification.md` 第 3 行。
+### mxfp8 / 压缩 MoE（未做）
+
+`dist_moe_mxfp8` 在配置期就要官方 `BlockScaledConfig` 等，NPU 旁路未接。没有第三条独立「压缩 MoE」配方。本次 **未改、未跑**。
+
+### 验证
+
+2026-10-30，`NGPU=4`、确定性开关打开，同一 bf16 配置连跑两次，10 步 loss / grad_norm 对齐。见 `docs/npu_debugmodel_verification.md` 第 3 行。
 
 ## 11. Dist-MoE / FSDP policy 软导入
 
