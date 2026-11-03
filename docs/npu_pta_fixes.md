@@ -50,21 +50,23 @@
 
 ## 问题 → 改动对照表（本仓 / 补丁目录仍保留）
 
-| # | 现象 / 失败 | 根因（一句话） | 改动落点 | 详情 |
-| --- | --- | --- | --- | --- |
-| 1 | RoPE / 视觉 RoPE `aclnnIndex` complex64 | 910B index 无 complex64 | `rope.py` / `vision_encoder.py` NPU `view_as_real` | [§1](#1-rope--视觉-rope-的-complex64-下标) |
-| 2 | packed-document mask：`Buffers cannot be created` / mask-out 编不过 | 间接 index 走 fallback 开临时 buffer；910B4 mask-out 核编挂 | `flex_attention.py.patch`：逐点 index + 非 950 关 mask-out | [§2](#2-packed-document-mask-的间接-index-与-mask-out) |
-| 3 | SwiGLU / Helion CUDA 路径在 NPU 挂 | 融合 override 绑 CUDA | 非 CUDA `silu(gate)*up`；with_cp 清空 override | [§3](#3-融合-swiglu-没有-npu-实现) |
-| 4 | flex 反向多 rank 选块段错误 | 分块过大 / 多 rank 并行 autotune 竞态 | 反向分块默认 16；flex autotune 文件锁 | [§4](#4-flex-attention-反向选块与多-rank-锁) |
-| 5 | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；配方 `train_timeout=1800` | [§5](#5-短视觉序列的-flex-decoding-和-训练超时) |
-| 6 | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§6](#6-编译线程限制为-1) |
-| 7 | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§7](#7-词表断言在编译期跳过) |
-| 8 | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§8](#8-视觉-encoder-输出-contiguous) |
-| 9 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | [§9](#9-init-timeout-保持-300) |
-| 10 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§10](#10-dist-moe-bf16-在-910b-上的专家计算) |
-| 11 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | [§11](#11-dist-moe--fsdp-policy-软导入) |
-| 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§12](#12-上下文并行的-block-mask-求和被编成-simt_only) |
-| 13 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
+表中「flex/非950」列：`Y` 表示属于 **flex attention 在非 Ascend 950（含 910B4）上的适配**；汇总见 [flex 非 950 适配点](#flex-attention-非-ascend-950-适配点)。
+
+| # | flex/非950 | 现象 / 失败 | 根因（一句话） | 改动落点 | 详情 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | | RoPE / 视觉 RoPE `aclnnIndex` complex64 | 910B index 无 complex64 | `rope.py` / `vision_encoder.py` NPU `view_as_real` | [§1](#1-rope--视觉-rope-的-complex64-下标) |
+| 2 | Y | packed-document mask：`Buffers cannot be created` / mask-out 编不过 | 间接 index 走 fallback 开临时 buffer；910B4 mask-out 核编挂 | `flex_attention.py.patch`：逐点 index + 非 950 关 mask-out | [§2](#2-packed-document-mask-的间接-index-与-mask-out) |
+| 3 | | SwiGLU / Helion CUDA 路径在 NPU 挂 | 融合 override 绑 CUDA | 非 CUDA `silu(gate)*up`；with_cp 清空 override | [§3](#3-融合-swiglu-没有-npu-实现) |
+| 4 | Y | flex 反向选块段错误（大 tile / 多 rank 并行 autotune） | 910B4 大分块 SIGSEGV；多进程同时选块竞态，一人崩则整组被 SIGTERM | 反向默认 tile=16；flex autotune 文件锁 | [§4](#4-flex-attention-反向选块与多-rank-锁) |
+| 5 | Y | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；配方 `train_timeout=1800` | [§5](#5-短视觉序列的-flex-decoding-和-训练超时) |
+| 6 | Y | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§6](#6-编译线程限制为-1) |
+| 7 | | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§7](#7-词表断言在编译期跳过) |
+| 8 | | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§8](#8-视觉-encoder-输出-contiguous) |
+| 9 | | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | [§9](#9-init-timeout-保持-300) |
+| 10 | | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§10](#10-dist-moe-bf16-在-910b-上的专家计算) |
+| 11 | | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | [§11](#11-dist-moe--fsdp-policy-软导入) |
+| 12 | Y | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§12](#12-上下文并行的-block-mask-求和被编成-simt_only) |
+| 13 | | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
 
 ### 未做 / 不可做
 
@@ -94,6 +96,21 @@
 - 说明与版本钉扎：`docs/npu_910b_patches/README.md`
 
 不要再手工改 `lowering.py` / `npu_combined_scheduling.py` / `torch_remat/_placeholder.py`。
+
+### flex attention 非 Ascend 950 适配点
+
+下列改动只针对 **非 950**（本机为 910B4）；Ascend 950 仍走上游默认的 mask-out / decoding / 自动选块等路径。落点以 `docs/npu_910b_patches/` 为主，配方超时在 torchtitan 侧。
+
+| 适配点 | 非 950 行为 | 代码/补丁落点 | 详情 |
+| --- | --- | --- | --- |
+| mask 子图间接 `aten.index` | Triton 且间接访存 codegen 关时，改用上游逐点 index（与 DVM 侧已有修法对齐） | `flex_attention.py.patch` | [§2](#2-packed-document-mask-的间接-index-与-mask-out) |
+| 关闭 mask-out | `_supports_flex_attention_mask_out()` → `false`，强制 mask-in | 同上 | [§2](#2-packed-document-mask-的间接-index-与-mask-out) |
+| 反向默认 tile=16 | `BLOCK_M1/N1/M2/N2` 默认 16，避免大块 SIGSEGV | 同上 | [§4](#4-flex-attention-反向选块与多-rank-锁) |
+| flex autotune 串行化 | 多 rank 对 flex 反向选块加文件锁，避免并行 autotune 竞态 | `triton_heuristics.py.patch` | [§4](#4-flex-attention-反向选块与多-rank-锁) |
+| 关闭 flex decoding | `_use_flex_decoding()` → `false`，短 query 仍走 mask-in 主核 | `flex_attention.py.patch` | [§5](#5-短视觉序列的-flex-decoding-和-训练超时) |
+| 编译线程=1 | `TORCHINDUCTOR_COMPILE_THREADS=1`，`TORCHNPU_PRECOMPILE_THREADS=1` | `env_npu_910b.sh` | [§6](#6-编译线程限制为-1) |
+| 禁止 `simt_only` | `simd_simt_mix` 不再生成仅 950 支持的 `simt_only`（CP block mask 求和会踩） | `triton_heuristics.py.patch` | [§12](#12-上下文并行的-block-mask-求和被编成-simt_only) |
+| 训练超时放宽（配方） | 视觉变长重编译时避免 HCCL 100s watchdog；与 decoding 关闭配合 | 相关 muse_spark 配方 `train_timeout_seconds=1800` | [§5](#5-短视觉序列的-flex-decoding-和-训练超时)、[§13](#13-第-4-行多模态配方的训练超时) |
 
 ---
 
@@ -192,7 +209,7 @@ flex attention **反向**核要把计算切成小块（tile），块大小由 `B
 
 **改法**：非 Ascend 950 上，mask-in 反向给上述 `BLOCK_*` **默认设为 16**（调用方已经指定则不覆盖）。见 `docs/npu_910b_patches/flex_attention.py.patch`。
 
-### 问题 2：多卡同时选块，一人崩、整组被收掉
+### 问题 2：多卡同时选块，一个崩、整组被收掉
 
 8 卡时还有第二种挂法：多个 rank **各自**在跑 `triton_per_fused_flex_attention_backward_0` 的几十组候选。某个 rank 先段错误退出；其余 rank 往往并不是自己算错，而是同伴死后被 `torchrun`/进程组发 **SIGTERM 连带杀掉**（分布式一人挂、整组收工）。同一形状在 **单卡** 上前向反向常能算出有限梯度；多卡时崩在哪个 rank 不固定，更像多进程并行 autotune 的竞态。
 
