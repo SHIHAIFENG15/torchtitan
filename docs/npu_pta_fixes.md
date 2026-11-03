@@ -109,9 +109,9 @@ Tensor self not implemented for DT_COMPLEX64
 
 `torchtitan/models/common/rope.py` 的 `_reshape_for_broadcast` 在 NPU 上改为先 `view_as_real`，用 float 下标取出，再 `view_as_complex` 变回去。CUDA 仍走原来的复数下标。
 
-## 2. 文档 mask 里的下标不能放进逐点子图
+## 2. Packed-document mask 的间接 index 与 mask-out
 
-`10:02:16` 的训练停在 `flex_attention` 编译 mask 子图：
+`10:02:16` 训练停在 `flex_attention` 编译 mask 子图：
 
 ```text
 SubgraphLoweringException: Buffers cannot be created while lowering a pointwise subgraph
@@ -119,11 +119,32 @@ While executing aten.index.Tensor
 attention.py: return kv_idx >= offsets[document_id[q_idx]]
 ```
 
-打包文档的 mask 要按 query 位置取出该文档的起始下标。910B 上间接访存的 codegen 是关的，`aten.index` 被登记成 AclNN fallback。fallback 会分配一块 buffer，逐点的 mask 子图不允许这样做。
+### 背景
 
-DVM 后端已经在 `torch_npu/_inductor/kernel/flex_attention.py` 里改回上游的逐点 index。默认 Triton 后端没有。本地把这个改回也用到 `inductor_indirect_memory_mode` 为空的情况。
+Packed-document 的 mask_mod 要对每个 `(q_idx, kv_idx)` 判定可见性，典型两步 gather：
 
-改完之后，缩小的 flex attention 能走过这个下标，但 910B4 上 mask-out 内核编译失败：一块是 UB 溢出，另一块是 `bishengir-compile` 直接 abort。同一段 mask 走 mask-in 可以编译并跑出结果。因此 `_supports_flex_attention_mask_out` 在非 Ascend 950 上改为返回 false，训练使用 mask-in。
+1. `document_id[q_idx]`：query 所属文档
+2. `offsets[document_id[q_idx]]`：该文档在序列中的起始下标
+
+第 2 步是 **indirect indexing**。Inductor 把 mask 降成 **pointwise subgraph**：只允许逐点可融合运算，**禁止在 lowering 时再分配中间 buffer**。
+
+### 问题 1：`aten.index` 走 AclNN fallback，破坏 pointwise 契约
+
+910B 默认 Triton 路径下 `inductor_indirect_memory_mode` 通常关闭，间接访存不会编进 Triton 逐点核。`aten.index.Tensor` 被登记为 AclNN fallback：先物化 index 结果（分配 temporary buffer），再参与后续计算。这与 pointwise subgraph 冲突，于是抛出上面的 `SubgraphLoweringException`。
+
+DVM 后端已在 `torch_npu/_inductor/kernel/flex_attention.py` 里，对 flex mask 子图把 `aten.index` 改回**上游 pointwise index lowering**（子图内直接 load，不走会分配 buffer 的 fallback）。默认 Triton + 910B 原先没有等价处理。
+
+**改法**：当 backend 为 DVM，或 `inductor_indirect_memory_mode` 未开启时，对 flex attention 的 mask 子图同样注入上游 pointwise `aten.index` lowering。见 `docs/npu_910b_patches/flex_attention.py.patch`。
+
+### 问题 2：910B4 上 mask-out 内核不可编译
+
+间接 index 打通后，缩小的 flex 能越过 mask 子图；但 910B4 上 **mask-out** 形态内核仍编不过（UB 溢出，或 `bishengir-compile` abort）。同一 mask 语义走 **mask-in** 可编译并跑出结果。
+
+**改法**：非 Ascend 950 上将 `_supports_flex_attention_mask_out()` 返回 `false`，训练强制 mask-in；950 仍可保留 mask-out。同属上述 flex 补丁。
+
+### 边界
+
+不改 Muse Spark 侧 mask 数学定义；不改 CUDA / Ascend 950 的 mask-out 路径。因果链：间接 gather → 910B 无 indirect codegen → index fallback 破 pointwise 契约 → 修 lowering；随后 mask-out 在 910B4 编译失败 → 强制 mask-in。
 
 ## 3. 融合 SwiGLU 没有 NPU 实现
 
