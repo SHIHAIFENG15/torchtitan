@@ -119,32 +119,40 @@ While executing aten.index.Tensor
 attention.py: return kv_idx >= offsets[document_id[q_idx]]
 ```
 
-### 背景
+### 在算什么
 
-Packed-document 的 mask_mod 要对每个 `(q_idx, kv_idx)` 判定可见性，典型两步 gather：
+多篇文档拼成一条长序列时，mask 要回答：这个 query 能不能看那个 key。做法是查表，而不是写死公式，例如：
 
-1. `document_id[q_idx]`：query 所属文档
-2. `offsets[document_id[q_idx]]`：该文档在序列中的起始下标
+1. 用 query 位置查出它属于哪篇文档：`document_id[q_idx]`
+2. 再用文档号查出这篇文档从哪开始：`offsets[document_id[q_idx]]`
+3. 比较 key 位置是否在允许范围内
 
-第 2 步是 **indirect indexing**。Inductor 把 mask 降成 **pointwise subgraph**：只允许逐点可融合运算，**禁止在 lowering 时再分配中间 buffer**。
+第 2 步是「用第一次查表的结果，再去查第二次」——间接下标（gather）。
 
-### 问题 1：`aten.index` 走 AclNN fallback，破坏 pointwise 契约
+flex 会把整段 mask 编成一块**逐点小图**：每个 `(query, key)` 当场算出 true/false。规则很严：**小图里不能再临时开一块中间结果缓冲区**。
 
-910B 默认 Triton 路径下 `inductor_indirect_memory_mode` 通常关闭，间接访存不会编进 Triton 逐点核。`aten.index.Tensor` 被登记为 AclNN fallback：先物化 index 结果（分配 temporary buffer），再参与后续计算。这与 pointwise subgraph 冲突，于是抛出上面的 `SubgraphLoweringException`。
+### 问题 1：间接下标被编成「先写出中间结果」
 
-DVM 后端已在 `torch_npu/_inductor/kernel/flex_attention.py` 里，对 flex mask 子图把 `aten.index` 改回**上游 pointwise index lowering**（子图内直接 load，不走会分配 buffer 的 fallback）。默认 Triton + 910B 原先没有等价处理。
+910B 默认 Triton 路径通常关着「间接访存专用代码生成」（`inductor_indirect_memory_mode`）。于是 `aten.index`（下标取值）不会融进小图，而被登记成 AclNN 兜底：
 
-**改法**：当 backend 为 DVM，或 `inductor_indirect_memory_mode` 未开启时，对 flex attention 的 mask 子图同样注入上游 pointwise `aten.index` lowering。见 `docs/npu_910b_patches/flex_attention.py.patch`。
+- 兜底做法：先申请一块临时内存，把下标取值的结果整块写进去，后面再读
+- 小图规则：不允许在编译这段 mask 时再开临时缓冲区
 
-### 问题 2：910B4 上 mask-out 内核不可编译
+两边打架，就报上面的 `Buffers cannot be created...`。
 
-间接 index 打通后，缩小的 flex 能越过 mask 子图；但 910B4 上 **mask-out** 形态内核仍编不过（UB 溢出，或 `bishengir-compile` abort）。同一 mask 语义走 **mask-in** 可编译并跑出结果。
+DVM 后端已经改过：在 flex 的 mask 小图里，把 `aten.index` 改回上游那种「在小图里直接读」，不走会开临时内存的兜底。默认 Triton + 910B 原先没有同样处理。
 
-**改法**：非 Ascend 950 上将 `_supports_flex_attention_mask_out()` 返回 `false`，训练强制 mask-in；950 仍可保留 mask-out。同属上述 flex 补丁。
+**改法**：backend 是 DVM，或间接访存代码生成没开时，给 flex mask 小图同样挂上上游的逐点 `aten.index`。补丁在 `docs/npu_910b_patches/flex_attention.py.patch`。
+
+### 问题 2：下标过了，mask-out 核在 910B4 仍编不过
+
+修好间接下标后，缩小的 flex 能走过 mask 小图。但 910B4 上还有第二种写法 **mask-out**（单独一套 mask 核外挂）编不过：片上 UB 不够，或 `bishengir-compile` 直接崩。同一套 mask 含义改用 **mask-in**（mask 写进 attention 主路径）可以编过、跑通。
+
+**改法**：非 Ascend 950 上 `_supports_flex_attention_mask_out()` 返回 `false`，训练只用 mask-in；950 仍可用 mask-out。同属上面的 flex 补丁。
 
 ### 边界
 
-不改 Muse Spark 侧 mask 数学定义；不改 CUDA / Ascend 950 的 mask-out 路径。因果链：间接 gather → 910B 无 indirect codegen → index fallback 破 pointwise 契约 → 修 lowering；随后 mask-out 在 910B4 编译失败 → 强制 mask-in。
+不改模型里 mask 的数学定义；不改 CUDA，也不改 Ascend 950 的 mask-out。顺序是：先让间接下标能合法编进小图，再在 910B4 上避开编挂的 mask-out。
 
 ## 3. 融合 SwiGLU 没有 NPU 实现
 
