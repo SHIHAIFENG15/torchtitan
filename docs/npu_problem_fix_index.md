@@ -66,3 +66,4 @@
 | `docs/npu_debugmodel_verification.md` | 按清单行的跑通数据与验收 |
 | `docs/npu_gpu_acceptance_report.md` | NPU↔GPU 四指标闭环与不达标原因 |
 | `docs/muse_acceptance_report_row1_2/` | 第 1–5 行验收报告 + 图 |
+| `docs/npu_a5_acceptance_ops.md` | **A5** 环境复测操作说明（给另一个 agent） |
