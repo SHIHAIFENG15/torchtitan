@@ -4,6 +4,8 @@
 
 分支：`npu-muse-spark-r04-code-fixes`。
 
+**编号约定**：对照表里的 `#N` 与下文「详情」里的 `## N.` 一一对应；A / E 表各自用 A1、E1 编号，不占用 1–13。
+
 ## 环境（A2）
 
 | 项 | 值 |
@@ -27,7 +29,7 @@
 
 | # | 现象 / 失败 | 根因（一句话） | 落点 |
 | --- | --- | --- | --- |
-| A1 | remat 反向段错误（空指针 / null storage 占位） | NPU 上不能用空指针 storage 做占位张量 | 运行时 `torchtitan_ascend/patches/storage.py`；安装期 `fixes/torch_npu/storage.patch`。简述见 [§7](#7-反向重算里的空指针占位张量) |
+| A1 | remat 反向段错误（空指针 / null storage 占位） | NPU 上不能用空指针 storage 做占位张量 | 运行时 `torchtitan_ascend/patches/storage.py`；安装期 `fixes/torch_npu/storage.patch`。简述见 [A1](#a1-反向重算里的空指针占位张量) |
 | A2 | 编译撞 `make_reduction(..., strict_reduction=...)` | Inductor API 与已装 `torch_npu` 不一致 | 运行时 `torchtitan_ascend/patches/inductor.py` |
 | A3 | `NPUCombinedScheduling` 相关 Inductor 调度/接口缺口 | 同上，调度侧与上游 API 不对齐 | 运行时 `torchtitan_ascend/patches/inductor.py` |
 
@@ -41,7 +43,7 @@
 
 | # | 现象 / 失败 | 根因（一句话） | 落点 | 详情 |
 | --- | --- | --- | --- | --- |
-| E1 | UltraData 拉 huggingface 被重置 | 机房出网受限，`huggingface.co:443` 连接重置 | 本地 JSONL：`f99ea981`（仅 `npu-muse-spark-debug-r04`） | [§14](#14-第-5-行改读本地-ultradata-jsonl) |
+| E1 | UltraData 拉 huggingface 被重置 | 机房出网受限，`huggingface.co:443` 连接重置 | 本地 JSONL：`f99ea981`（仅 `npu-muse-spark-debug-r04`） | [E1](#e1-第-5-行改读本地-ultradata-jsonl) |
 | E2 | 裸 `torchtitan.train` 段错误 / 再撞 make_reduction | 未走 ascend 入口，A1–A3 补丁未加载 | `ENTRYPOINT=torchtitan_ascend.train` | 见上文 A 表 |
 
 ---
@@ -50,18 +52,18 @@
 
 | # | 现象 / 失败 | 根因（一句话） | 改动落点 | 详情 |
 | --- | --- | --- | --- | --- |
-| 1 | RoPE / 视觉 RoPE `aclnnIndex` complex64 | 910B index 无 complex64 | `rope.py` / `vision_encoder.py` NPU `view_as_real` | [§1](#1-rope-用-complex64-做下标)、[§6](#6-视觉-rope-的-complex64-下标) |
+| 1 | RoPE / 视觉 RoPE `aclnnIndex` complex64 | 910B index 无 complex64 | `rope.py` / `vision_encoder.py` NPU `view_as_real` | [§1](#1-rope--视觉-rope-的-complex64-下标) |
 | 2 | packed-document mask：`Buffers cannot be created` / mask-out 编不过 | 间接 index 走 fallback 开临时 buffer；910B4 mask-out 核编挂 | `flex_attention.py.patch`：逐点 index + 非 950 关 mask-out | [§2](#2-packed-document-mask-的间接-index-与-mask-out) |
 | 3 | SwiGLU / Helion CUDA 路径在 NPU 挂 | 融合 override 绑 CUDA | 非 CUDA `silu(gate)*up`；with_cp 清空 override | [§3](#3-融合-swiglu-没有-npu-实现) |
-| 4 | flex 反向多 rank 选块段错误 | 并行选块竞态 | 反向分块默认 16；autotune 文件锁 | [§4](#4-flex-attention-反向在-910b4-上段错误)、[§8](#8-8-个-rank-同时给-flex-attention-反向选块) |
-| 5 | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；`train_timeout=1800` | [§9](#9-短视觉序列的-flex-decoding-和-100-秒超时) |
-| 6 | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§4](#4-flex-attention-反向在-910b4-上段错误) |
-| 7 | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§10](#10-词表断言和-fsdp-的-view-输出) |
-| 8 | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§10](#10-词表断言和-fsdp-的-view-输出) |
-| 9 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | commit `d0f5101f` |
-| 10 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§12](#12-dist-moe-bf16-在-910b-上的专家计算) |
-| 11 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | `f1c0e844` |
-| 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
+| 4 | flex 反向多 rank 选块段错误 | 分块过大 / 多 rank 并行 autotune 竞态 | 反向分块默认 16；flex autotune 文件锁 | [§4](#4-flex-attention-反向选块与多-rank-锁) |
+| 5 | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；配方 `train_timeout=1800` | [§5](#5-短视觉序列的-flex-decoding-和-训练超时) |
+| 6 | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§6](#6-编译线程限制为-1) |
+| 7 | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§7](#7-词表断言在编译期跳过) |
+| 8 | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§8](#8-视觉-encoder-输出-contiguous) |
+| 9 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | [§9](#9-init-timeout-保持-300) |
+| 10 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§10](#10-dist-moe-bf16-在-910b-上的专家计算) |
+| 11 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | [§11](#11-dist-moe--fsdp-policy-软导入) |
+| 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§12](#12-上下文并行的-block-mask-求和被编成-simt_only) |
 | 13 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
 
 ### 未做 / 不可做
@@ -95,10 +97,9 @@
 
 ---
 
+## 1. RoPE / 视觉 RoPE 的 complex64 下标
 
-## 1. RoPE 用 complex64 做下标
-
-`09:59:14` 的训练已经走过 attention mask 编译，停在第一层 RoPE：
+文本路径 `09:59:14` 已走过 attention mask 编译，停在第一层 RoPE：
 
 ```text
 rope.py: rope_cache = rope_cache[positions]
@@ -109,6 +110,16 @@ Tensor self not implemented for DT_COMPLEX64
 `ComplexRoPE` 的频率表是 `complex64`。NPU 的 index 只支持 float、bfloat16、整型和 bool，不支持 complex64。
 
 `torchtitan/models/common/rope.py` 的 `_reshape_for_broadcast` 在 NPU 上改为先 `view_as_real`，用 float 下标取出，再 `view_as_complex` 变回去。CUDA 仍走原来的复数下标。
+
+8 卡多模态还会在视觉编码器里再踩一次（不经过上面的 `_reshape_for_broadcast`）：
+
+```text
+RuntimeError: index_high_dims_op_api aclnnIndex 161002
+DT_COMPLEX64
+vision_encoder.py: freqs_cis_GD[sp_perm]
+```
+
+`torchtitan/models/muse_spark/vision_encoder.py` 在 NPU 上同样先 `view_as_real`，按下标取实部虚部，再 `view_as_complex`。其它设备仍走原来的下标。
 
 ## 2. Packed-document mask 的间接 index 与 mask-out
 
@@ -141,7 +152,7 @@ flex 会把整段 mask 编成一块**逐点小图**：每个 `(query, key)` 当�
 
 两边打架，就报上面的 `Buffers cannot be created...`。
 
-DVM 后端已经改过：在 flex 的 mask 小图里，把 `aten.index` 改回上游那种「在小图里直接读」，不走会开临时内存的兜底。默认 Triton + 910B 原先没有同样处理。
+DVM（`torch_npu` 的另一种 Inductor 后端，与默认 Triton 并列）已经改过：在 flex 的 mask 小图里，把 `aten.index` 改回上游那种「在小图里直接读」，不走会开临时内存的兜底。默认 Triton + 910B 原先没有同样处理。
 
 **改法**：backend 是 DVM，或间接访存代码生成没开时，给 flex mask 小图同样挂上上游的逐点 `aten.index`。补丁在 `docs/npu_910b_patches/flex_attention.py.patch`。
 
@@ -169,59 +180,21 @@ NotImplementedError: Could not run 'torchtitan::silu_and_mul' with arguments fro
 
 `FusedSwiGLU.__call__` 在非 CUDA 设备上改为 `silu(gate) * up`。有效行的结果和 Triton 核一致，反向走普通 autograd。CUDA 仍走原来的融合核。
 
-## 4. flex attention 反向在 910B4 上段错误
+## 4. flex attention 反向选块与多 rank 锁
 
 四卡训练走到 flex attention 反向后，rank 3 以 SIGSEGV（exit -11）退出，没有 Python 异常。自动选块挑中了大于 16 的 `BLOCK_M1/BLOCK_N1`。同一段 mask 把反向分块固定成 16 时，前向和反向都能跑完，梯度不是 0。
 
 `torch_npu/_inductor/kernel/flex_attention.py` 的 mask-in 反向在非 Ascend 950 上把 `BLOCK_M1`、`BLOCK_N1`、`BLOCK_M2`、`BLOCK_N2` 默认设为 16。调用方如果已经指定了这些值，不会被覆盖。
 
-分块改成 16 之后，训练能打完前几步，但 inductor 的编译子进程池在后面的 step 里段错误退出（日志里有 `SubprocPool unclean exit`）。`env.sh` 里设置 `TORCHINDUCTOR_COMPILE_THREADS=1`，编译改在本进程做。这样 `muse_spark_debugmodel` 的 10 步可以跑完。
+多 rank 时还有一种段错误：一个 rank 在 `triton_per_fused_flex_attention_backward_0` 的几十组候选里退出（exit -11），其余 rank 被 SIGTERM。同一形状在单卡上前向反向都能算出有限梯度。崩的 rank 每次不一样。
 
-`TORCHINDUCTOR_COMPILE_THREADS` 管的是 PyTorch 自己的编译进程池。`torch_npu` 另有 `precompile_thread_num`，默认至少 32，环境变量是 `TORCHNPU_PRECOMPILE_THREADS`。`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 flex attention 反向选块时，这个池子开了 128 个线程去测 `triton_per_fused_flex_attention_backward_0` 的 68 组配置，rank 0 段错误。`env.sh` 里把 `TORCHNPU_PRECOMPILE_THREADS` 也设成 1。
+尝试过在选块时直接拿最小的 runtime tile；launcher 和 runtime block 对不上，已撤掉。留下的改法在 `torch_npu/_inductor/runtime/triton_heuristics.py`：名字里带 `flex_attention` 的 autotune 用 `fcntl.flock` 锁住 `/tmp/npu_flex_attention_autotune.lock`，同一时刻只有一个进程在跑候选。同进程重入用深度计数，避免自己把自己锁死。候选本身仍按原来的计时挑选，不改分块。
 
-## 5. 上下文并行的 block mask 求和被编成 simt_only
+以上均在 `docs/npu_910b_patches/` 的 flex / heuristics 补丁里。
 
-`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 `_cp_shard` 里编译 `create_block_mask`。query 被 CP 切开后，mask 先垫到 128 的倍数，再按 `128 x 128` 的块求和。这个 reduction 走 `NPUTritonKernel`，元数据里的 `npu_kernel_type` 被写成 `simd_simt_mix`。选块时会先生成 `compile_mode="simt_only"`。910B4 不是 Ascend 950，Triton 直接拒绝这个模式，于是整组配置都算失败：
+## 5. 短视觉序列的 flex decoding 和训练超时
 
-```text
-NoTritonConfigsError: No valid triton configs for kernel
-triton_red_fused__to_copy_bitwise_and_eq_gt_lt_permute_sum_view_3
-ValueError: compile_mode="simt_only" is supported only on Ascend 950 targets.
-```
-
-孤立的 `sum` 复现也会停在同一句话，但训练失败是自己走到了这个 kernel。
-
-`torch_npu/_inductor/runtime/triton_heuristics.py` 里，非 Ascend 950 不再为 `simd_simt_mix` 生成 `simt_only` 配置，只保留 `simd_simt_template`。910B 上这个模式走普通 SIMD。用动态长度 256、key 长度 512 的 bool mask 编译同一段 view、permute、sum，结果和 eager 一致。
-
-## 6. 视觉 RoPE 的 complex64 下标
-
-8 卡多模态配方 `muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4` 第一轮停在：
-
-```text
-RuntimeError: index_high_dims_op_api aclnnIndex 161002
-DT_COMPLEX64
-vision_encoder.py: freqs_cis_GD[sp_perm]
-```
-
-`49cbb4d` 修的是 `rope.py` 的 `_reshape_for_broadcast`。视觉编码器在 sparse attention 里直接对 complex64 的频率缓存做下标，不经过那个函数。910B 的 index 没有 complex64。
-
-`torchtitan/models/muse_spark/vision_encoder.py` 在 NPU 上改成先 `view_as_real`，按下标取出实部虚部，再 `view_as_complex`。其它设备仍走原来的下标。
-
-## 7. 反向重算里的空指针占位张量
-
-属上表 **A1**。不再在本仓库记录改法，也不再打 `torch_remat` 占位补丁。用 `torchtitan-ascend` 的 `torchtitan_ascend/patches/storage.py` 和安装期 `fixes/torch_npu/storage.patch`（跟踪 Ascend/pytorch !47944）。
-
-## 8. 8 个 rank 同时给 flex attention 反向选块
-
-占位张量改完之前，还有一种段错误没有 Python 异常：一个 rank 在 `triton_per_fused_flex_attention_backward_0` 的几十组候选里退出（exit -11），其余 rank 被 SIGTERM。同一形状在单卡上前向反向都能算出有限梯度。视觉序列一例是 1460，head_dim 16，2 个本地 head。文本一例是 query `1x4x256x32`、KV `1x2x512x32`。崩的 rank 每次不一样。
-
-尝试过在选块时直接拿最小的 runtime tile。launcher 和 runtime block 对不上，进程以 `realloc(): invalid pointer` / `munmap_chunk(): invalid pointer` 中止。这处改动已撤掉。
-
-留下的改法在 `torch_npu/_inductor/runtime/triton_heuristics.py`：名字里带 `flex_attention` 的 autotune 用 `fcntl.flock` 锁住 `/tmp/npu_flex_attention_autotune.lock`，同一时刻只有一个进程在跑候选。同进程重入用深度计数，避免自己把自己锁死。候选本身仍按原来的计时挑选，不改分块。
-
-## 9. 短视觉序列的 flex decoding 和 100 秒超时
-
-第 1 到第 4 步能打完之后，第 5 步视觉 token 数变成 4。inductor 改走 flex decoding（query 长度小于 128）。rank 0 还在编译，另一个 rank 已经发出 all-gather。第 1 步之后进程组超时是 `train_timeout_seconds=100`。大约 100 秒后：
+第 1 到第 4 步能打完之后，第 5 步视觉 token 数变成 4。inductor 改走 flex decoding（query 长度小于 128）。rank 0 还在编译，另一个 rank 已经发出 all-gather。第 1 步之后进程组超时若仍是默认 `train_timeout_seconds=100`，大约 100 秒后：
 
 ```text
 Watchdog caught collective operation timeout:
@@ -232,20 +205,30 @@ HCCL watchdog 把还在集合通信里的 rank 打成 SIGABRT（exit -6）。`Nu
 
 两处一起改：
 
-- `torch_npu/_inductor/kernel/flex_attention.py` 的 `_use_flex_decoding` 在非 Ascend 950 上直接返回 false。短序列继续用已经能跑的 mask-in flex attention，不再编一套 decoding 核。
-- `tests/integration_tests/models.py` 里这条 8 卡配方把 `comm.train_timeout_seconds` 设为 1800。新的视觉长度仍会重新编译，第 5 步和第 8 步各花了大约一分钟，100 秒盖不住，1800 秒盖得住。
+- `flex_attention.py` 的 `_use_flex_decoding` 在非 Ascend 950 上直接返回 false。短序列继续用已经能跑的 mask-in flex attention，不再编一套 decoding 核。
+- 相关 8 卡配方把 `comm.train_timeout_seconds` 设为 1800。新的视觉长度仍会重新编译，第 5 步和第 8 步各花了大约一分钟，100 秒盖不住，1800 秒盖得住。
 
-## 10. 词表断言和 FSDP 的 view 输出
+## 6. 编译线程限制为 1
+
+分块改成 16 之后，训练能打完前几步，但 inductor 的编译子进程池在后面的 step 里段错误退出（日志里有 `SubprocPool unclean exit`）。
+
+`TORCHINDUCTOR_COMPILE_THREADS` 管的是 PyTorch 自己的编译进程池。`torch_npu` 另有 `precompile_thread_num`，默认至少 32，环境变量是 `TORCHNPU_PRECOMPILE_THREADS`。`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 flex attention 反向选块时，这个池子开了 128 个线程去测几十组配置，rank 0 段错误。
+
+`docs/npu_910b_patches/env_npu_910b.sh`（以及容器 `env.sh`）里把两者都设成 1，编译改在本进程做。这样 `muse_spark_debugmodel` 的 10 步可以跑完。
+
+## 7. 词表断言在编译期跳过
 
 `torchtitan/components/loss.py` 里，`_LossParallelCrossEntropy` 的 `torch._assert_async` 在 `torch.compiler.is_compiling()` 时跳过。910B 的 inductor 编不出这个 0 维 device 断言，会停在编译里。eager 时检查还在。
 
+## 8. 视觉 encoder 输出 contiguous
+
 `NaViTEncoder.forward` 末尾，单帧时 `torch.cat` 返回的就是那一帧，FSDP 把它看成 view，就地算子会丢掉 pre-backward all-gather。返回值改成 `torch.cat(outputs).contiguous()`。音频编码器和文本 block 的同类警告这次没有改调用点。
 
-## 11. 8 卡多模态 10 步
+## 9. init timeout 保持 300
 
-上面几处都在的那次运行是 2026-10-28 的 `item2_logs/mm_r12.log`。10 步结束，日志有 `Training completed`。rank 0 的 loss 从 7.66202 到 4.68848，grad_norm 从 9.4633 到 3.0236，逐步数字在 `docs/npu_debugmodel_verification.md`。没有和参考 loss 对过。
+曾把全局 `init_timeout_seconds` 也抬到 1800，启动阶段过猛。`d0f5101f` 起默认 init 超时保持 300；需要盖住首步 flex 编译的 1800 只写在具体配方的 `train_timeout_seconds`（以及个别配方的 `init_timeout_seconds`）里。
 
-## 12. Dist-MoE bf16 在 910B 上的专家计算
+## 10. Dist-MoE bf16 在 910B 上的专家计算
 
 清单第 3 行只有两个配方：`muse_spark_debugmodel_dist_moe_bf16`、`muse_spark_debugmodel_dist_moe_mxfp8`。原先 bf16 过不了设备检查：
 
@@ -269,7 +252,7 @@ bf16 的改动都在 torchtitan 里（`fc3aa0cf` 已入库），不改 site-pack
 - 激活是普通 SwiGLU 时用 `npu_swiglu`，按最后一维对半，前一半 gate、后一半 up。ClampedSwiGLU 仍走 Python 公式。debug 模型用的是普通 SwiGLU。
 - token 交换用现成的 `AllToAllTokenDispatcher._dispatch` / `_combine`，不是 `npu_moe_distribute_dispatch`。dispatcher 用 `object.__setattr__` 挂在模块上，不进子模块，避免改 CUDA 那条的 state dict 和 FSDP 树。分数仍在 combine 里做加权 scatter-add。
 
-第一次 4 卡启动（`/workspace/dist_moe_bf16_r1.log`）没有 step，报：
+第一次 4 卡启动没有 step，报：
 
 ```text
 RuntimeError: remat.region 'dispatch' was called with recompute=True while nested inside a recompute=False (SAVE) region.
@@ -279,17 +262,41 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 
 `muse_spark_debugmodel_dist_moe_bf16` 在 `_with_dist_moe` 之后把 `disable_cuda_graphs` 设回 True。910B 没有 CUDA graph。`local_compile_regions` 收回 `loss`、`fp32_to_bf16_split`，`train_timeout_seconds=1800`。网格仍是基类的 4 卡 `dp_shard=2, tp=2, ep=2`。
 
-2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=4`，同一配置连跑两次（`/workspace/dist_moe_bf16_r2.log`、`r3.log`）。10 步 loss、grad_norm 逐项相同，loss 从 7.68369 到 5.36020，grad_norm 从 2.7578 到 1.6899。两趟都有 `Training completed` 和 `Process group destroyed`。逐步数字在 `docs/npu_debugmodel_verification.md` 第 3 行。没有 GPU 1000 步基线。
+2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=4`，同一配置连跑两次。10 步 loss、grad_norm 逐项相同。逐步数字在 `docs/npu_debugmodel_verification.md` 第 3 行。
+
+## 11. Dist-MoE / FSDP policy 软导入
+
+可选依赖 `dist_moe` / 部分 FSDP `MixedPrecisionPolicy` 在已装 torch 上导入过硬时，训练在配置阶段直接失败。`f1c0e844` 改为软探测：导入失败则跳过对应路径，避免无包或 API 不齐时整段起不来。
+
+## 12. 上下文并行的 block mask 求和被编成 simt_only
+
+`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 `_cp_shard` 里编译 `create_block_mask`。query 被 CP 切开后，mask 先垫到 128 的倍数，再按 `128 x 128` 的块求和。这个 reduction 走 `NPUTritonKernel`，元数据里的 `npu_kernel_type` 被写成 `simd_simt_mix`。选块时会先生成 `compile_mode="simt_only"`。910B4 不是 Ascend 950，Triton 直接拒绝这个模式，于是整组配置都算失败：
+
+```text
+NoTritonConfigsError: No valid triton configs for kernel
+triton_red_fused__to_copy_bitwise_and_eq_gt_lt_permute_sum_view_3
+ValueError: compile_mode="simt_only" is supported only on Ascend 950 targets.
+```
+
+`torch_npu/_inductor/runtime/triton_heuristics.py` 里，非 Ascend 950 不再为 `simd_simt_mix` 生成 `simt_only` 配置，只保留 `simd_simt_template`。910B 上这个模式走普通 SIMD。补丁在 `docs/npu_910b_patches/triton_heuristics.py.patch`。
 
 ## 13. 第 4 行多模态配方的训练超时
 
-`muse_spark_debugmodel_mm` 是清单第 4 行：8 卡 `dp_shard=2, tp=2, cp=2, ep=2`，Ulysses。视觉 token 长度一变，flex attention 就要重新编译。第 2 行③那条 EP4、AllGatherKV 的变体已经在 `tests/integration_tests/models.py` 里把 `train_timeout_seconds` 设成 1800，因为编译超过默认 100 秒时，先跑完的 rank 会把 all-gather 拖到 HCCL watchdog 超时。
+`muse_spark_debugmodel_mm` 是清单第 4 行：8 卡 `dp_shard=2, tp=2, cp=2, ep=2`，Ulysses。视觉 token 长度一变，flex attention 就要重新编译。第 2 行③那条 EP4、AllGatherKV 的变体已经把 `train_timeout_seconds` 设成 1800；清单上的这份配方原来没有。
 
-清单上的这份配方原来没有设这个超时。`torchtitan_recipes/tests/models/muse_spark.py` 的 `muse_spark_debugmodel_mm` 在返回前补上 `config.comm.train_timeout_seconds = 1800`。其它字段没改，融合 SwiGLU override 仍在。
+`torchtitan_recipes/tests/models/muse_spark.py` 的 `muse_spark_debugmodel_mm` 在返回前补上 `config.comm.train_timeout_seconds = 1800`。其它字段没改。
 
-2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=8`，连跑两次（`/workspace/det_mm_ep2_r1.log`、`r2.log`）。网格是 `dp_shard=2, cp=2, tp=2, ep=2`。10 步 loss、grad_norm 逐项相同，loss 从 7.69125 到 4.57818，grad_norm 从 9.7405 到 2.7223。逐步数字在 `docs/npu_debugmodel_verification.md` 第 4 行。没有单独打印每个模态、dummy 是否为 0、bank index 和 token 分片。
+2026-10-30 在 `179.173.2.3` 上，`NGPU=8` 连跑两次 10 步可对齐。逐步数字在 `docs/npu_debugmodel_verification.md` 第 4 行。
 
-## 14. 第 5 行改读本地 UltraData JSONL
+（同波次 8 卡多模态在补丁齐全后可跑完 10 步，见 verification 文档；此处不另占编号。）
+
+---
+
+## A1. 反向重算里的空指针占位张量
+
+属上表 **A1**。不再在本仓库记录改法，也不再打 `torch_remat` 占位补丁。用 `torchtitan-ascend` 的 `torchtitan_ascend/patches/storage.py` 和安装期 `fixes/torch_npu/storage.patch`（跟踪 Ascend/pytorch !47944）。
+
+## E1. 第 5 行改读本地 UltraData JSONL
 
 属上表 **E1**（环境问题，非仓库缺陷）。
 
