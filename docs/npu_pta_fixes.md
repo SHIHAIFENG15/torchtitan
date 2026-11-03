@@ -182,15 +182,27 @@ NotImplementedError: Could not run 'torchtitan::silu_and_mul' with arguments fro
 
 ## 4. flex attention 反向选块与多 rank 锁
 
-四卡训练走到 flex attention 反向后，rank 3 以 SIGSEGV（exit -11）退出，没有 Python 异常。自动选块挑中了大于 16 的 `BLOCK_M1/BLOCK_N1`。同一段 mask 把反向分块固定成 16 时，前向和反向都能跑完，梯度不是 0。
+### 在干什么
 
-`torch_npu/_inductor/kernel/flex_attention.py` 的 mask-in 反向在非 Ascend 950 上把 `BLOCK_M1`、`BLOCK_N1`、`BLOCK_M2`、`BLOCK_N2` 默认设为 16。调用方如果已经指定了这些值，不会被覆盖。
+flex attention **反向**核要把计算切成小块（tile），块大小由 `BLOCK_M1`、`BLOCK_N1`、`BLOCK_M2`、`BLOCK_N2` 等参数决定。Inductor/Triton 常会 **autotune**：试很多组块大小，按耗时挑一组。910B4 上这套自动选块不稳定。
 
-多 rank 时还有一种段错误：一个 rank 在 `triton_per_fused_flex_attention_backward_0` 的几十组候选里退出（exit -11），其余 rank 被 SIGTERM。同一形状在单卡上前向反向都能算出有限梯度。崩的 rank 每次不一样。
+### 问题 1：块太大，本 rank 直接段错误
 
-尝试过在选块时直接拿最小的 runtime tile；launcher 和 runtime block 对不上，已撤掉。留下的改法在 `torch_npu/_inductor/runtime/triton_heuristics.py`：名字里带 `flex_attention` 的 autotune 用 `fcntl.flock` 锁住 `/tmp/npu_flex_attention_autotune.lock`，同一时刻只有一个进程在跑候选。同进程重入用深度计数，避免自己把自己锁死。候选本身仍按原来的计时挑选，不改分块。
+四卡训练走到 flex 反向后，某个 rank（例如 rank 3）以 **SIGSEGV（exit -11）** 退出，没有 Python 异常。对照发现：自动选块挑中 **大于 16** 的 `BLOCK_M1/BLOCK_N1` 时会崩；同一段 mask 把反向分块 **固定成 16** 时，前向和反向都能跑完，梯度有限、非 0。
 
-以上均在 `docs/npu_910b_patches/` 的 flex / heuristics 补丁里。
+**改法**：非 Ascend 950 上，mask-in 反向给上述 `BLOCK_*` **默认设为 16**（调用方已经指定则不覆盖）。见 `docs/npu_910b_patches/flex_attention.py.patch`。
+
+### 问题 2：多卡同时选块，一人崩、整组被收掉
+
+8 卡时还有第二种挂法：多个 rank **各自**在跑 `triton_per_fused_flex_attention_backward_0` 的几十组候选。某个 rank 先段错误退出；其余 rank 往往并不是自己算错，而是同伴死后被 `torchrun`/进程组发 **SIGTERM 连带杀掉**（分布式一人挂、整组收工）。同一形状在 **单卡** 上前向反向常能算出有限梯度；多卡时崩在哪个 rank 不固定，更像多进程并行 autotune 的竞态。
+
+曾试过选块时直接拿最小 runtime tile；launcher 与 runtime block 对不齐，已撤掉。
+
+**改法**：在 `triton_heuristics.py` 里，名字带 `flex_attention` 的 autotune 用 `fcntl.flock` 锁 `/tmp/npu_flex_attention_autotune.lock`，**同一时刻只让一个进程试配置**。同进程重入用深度计数，避免自己锁死自己。候选仍按原来的计时挑选，不改成「永远用最小块」。见 `docs/npu_910b_patches/triton_heuristics.py.patch`。
+
+### 边界
+
+不改 flex 反向的数学；CUDA / Ascend 950 不强制默认 16。§6 的「编译线程=1」管的是编译进程池，和本节的「选块加锁」是两件事。
 
 ## 5. 短视觉序列的 flex decoding 和训练超时
 
