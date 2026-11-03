@@ -1,6 +1,6 @@
 # Muse Spark 在 910B 上的 NPU 修复记录
 
-记录 `muse_spark_debugmodel` 及相关清单配方在容器里的失败原因、速查对照与修复细节。只记本仓库仍要保留的改动；验收指标不达标（精度/线性度/内存）不进本文件。
+记录 `muse_spark_debugmodel` 及相关清单配方在容器里的失败原因、速查对照与修复细节。本仓代码 / 补丁问题进对照表；ascend 覆盖进 A 表；纯环境问题进 E 表（对应代码只在 `npu-muse-spark-debug-r04`）。验收指标不达标不进本文件。
 
 分支：`npu-muse-spark-r04-code-fixes`。
 
