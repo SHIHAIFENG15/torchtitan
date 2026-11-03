@@ -35,6 +35,17 @@
 
 ---
 
+## 环境问题（非本仓代码问题）
+
+机房/出网等环境限制，**不是** torchtitan 仓库缺陷。绕过代码只在 `npu-muse-spark-debug-r04`，**不**合入 `npu-muse-spark-r04-code-fixes`。
+
+| # | 现象 / 失败 | 根因（一句话） | 落点（仅 r04） | 详情 |
+| --- | --- | --- | --- | --- |
+| E1 | UltraData 拉 huggingface 被重置 | 机房出网受限，`huggingface.co:443` 连接重置 | 本地 JSONL：`f99ea981`（`npu-muse-spark-debug-r04`） | [§14](#14-第-5-行改读本地-ultradata-jsonl) |
+| E2 | ultradata 4 卡 EP8 ValueError | `ep` 须整除 `dp*cp*tp`；线性度对照两侧改 EP4 | `b188a02c`（同上 r04） | 随 E1 |
+
+---
+
 ## 问题 → 改动对照表（本仓 / 补丁目录仍保留）
 
 | # | 现象 / 失败 | 根因（一句话） | 改动落点 | 详情 |
@@ -49,11 +60,9 @@
 | 8 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | commit `d0f5101f` |
 | 9 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§12](#12-dist-moe-bf16-在-910b-上的专家计算) |
 | 10 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | `f1c0e844` |
-| 11 | UltraData 拉 huggingface 被重置 | 出网受限 | 本地 JSONL（环境侧） | [§14](#14-第-5-行改读本地-ultradata-jsonl) |
-| 12 | ultradata 4 卡 EP8 ValueError | `ep` 须整除 `dp*cp*tp` | 线性度两侧 EP4 | `b188a02c` |
-| 13 | 裸 `torchtitan.train` 段错误 / 再撞 make_reduction | 未走 ascend 入口，A 表补丁未生效 | 一律 `torchtitan_ascend.train` | 并见上表 A1–A3 |
-| 14 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
-| 15 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
+| 11 | 裸 `torchtitan.train` 段错误 / 再撞 make_reduction | 未走 ascend 入口，A 表补丁未生效 | 一律 `torchtitan_ascend.train` | 并见上表 A1–A3 |
+| 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
+| 13 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
 
 ### 未做 / 不可做
 
@@ -253,30 +262,12 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 
 ## 14. 第 5 行改读本地 UltraData JSONL
 
-说明：这是机房出网受限下的**环境侧**绕过（`f99ea981` / `b188a02c` 在 `npu-muse-spark-debug-r04`），本分支 tip 不收录对应 recipe 改动；条目保留便于对照。
+属上表 **E1 / E2**（环境问题，非仓库缺陷）。
 
-`muse_spark_debugmodel_ultradata_lora_sft` 原来调用 `_ultradata_sft_dataloader()`，不传 source 时内部是 `HuggingFaceStreamingSource`，数据集 `openbmb/UltraData-SFT-Agent-2609`。这台机器上 huggingface.co:443 会被连接重置，流式数据起不来。816B 配方已经支持本地 JSONL，debug 配方没有走那条。
+对应改动只在 **`npu-muse-spark-debug-r04`**：`f99ea981`（本地 JSONL）、`b188a02c`（4 卡线性度 EP4）。**`npu-muse-spark-r04-code-fixes` 不含这些 recipe 改动。**
 
-debug 配方在 `_use_released_tokenizer_with_debug_model` 之后同样读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN`，默认 `_ULTRADATA_LOCAL_JSONL_PATTERN`，用 `IndexedJsonlSource` 交给原来的 `_ultradata_sft_dataloader`。ChatProcessor、MuseSparkRenderer、LoRA、32K 和 `FullActivationRematConfig` 没改。`.gitignore` 加上 `assets/datasets/`，JSONL 不进 git。
+`muse_spark_debugmodel_ultradata_lora_sft` 默认走 `HuggingFaceStreamingSource`（`openbmb/UltraData-SFT-Agent-2609`）。本机 `huggingface.co:443` 会被连接重置，流式数据起不来。r04 上 debug 配方改读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN` / 默认本地 JSONL，经 `IndexedJsonlSource` 交给 `_ultradata_sft_dataloader`。JSONL 不进 git（`assets/datasets/`）。
 
-官方 tokenizer 仓库要手动授权。放到 `assets/hf/Muse-Spark-Open-816B-A42B` 的是公开副本里的 tokenizer 文件。`tokenizer.json` 最大 id 是 201817，配置里的词表宽度仍是 202048。没有下 816B 权重。数据只放了 General-Agent 第 1 份，1575113443 字节。
+4 卡性能对照时若仍用 EP8，会因 `ep` 不整除 `dp*cp*tp` 报 `ValueError`；r04 上线性度两侧改为 EP4（E2）。
 
-2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=8`，连跑两次（`/workspace/det_ultradata_r1.log`、`r2.log`）。网格是 `dp_shard=2, cp=2, tp=2, ep=8`。10 步 loss、grad_norm 逐项相同，loss 从 12.31145 到 12.28428，grad_norm 从 0.2715 到 0.2656。逐步数字在 `docs/npu_debugmodel_verification.md` 第 5 行。没有单独打印 loss_mask 里有多少个监督 token。
-
-## 15. 第 1 行性能线性度与单卡内存对照配方
-
-说明：perf/mem 配方与记数文档在 `npu-muse-spark-debug-r04`（`e8bd720c` 起）；本分支 tip 不收录，条目保留便于对照。
-
-验收标准要求：性能用同一配方只加倍 DP，比 8 卡 tps / 4 卡 tps；内存先比单卡日志预留。原 `muse_spark_debugmodel` 世界大小写死为 4、只有 10 步，凑不齐这两项。
-
-在 `torchtitan_recipes/tests/models/muse_spark.py` 增加三个配方，不改原 10 步验收配置：
-
-- `muse_spark_debugmodel_perf_dp2`：网格与基类相同（`dp_shard=2, tp=2, ep=2`），`steps=200`
-- `muse_spark_debugmodel_perf_dp4`：只把 `data_parallel_shard_degree` 改成 4，世界大小 8，`steps=200`
-- `muse_spark_debugmodel_mem_1device`：全部并行度为 1，关掉 sequence parallel，`steps=20`
-
-跑法、记数表和达标判定写在 r04 的 `docs/gpu_baseline_perf_mem.md`。NPU 与 GPU 必须用同一 CONFIG。
-
-2026-10-31 NPU 实测：`mem_1device`、`perf_dp2`、`perf_dp4` 均跑通。
-`perf_*` 需 `init_timeout_seconds=train_timeout_seconds=1800`，否则 8 卡首步 flex 编译会触发 HCCL watchdog。
-性能跑建议开 `MUSE_DEBUG_DETERMINISTIC=1`；未开时 4 卡曾在首步报非有限梯度。
+2026-10-30 在 r04 + 本地数据上，`NGPU=8` 连跑两次 10 步可对齐；逐步数字在该分支的 `docs/npu_debugmodel_verification.md` 第 5 行。
