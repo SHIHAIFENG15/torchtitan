@@ -1,15 +1,72 @@
 # Muse Spark 在 910B 上的 NPU 修复记录
 
-记录 `muse_spark_debugmodel` 及相关清单配方在容器里的失败原因和修复。只记本仓库仍要保留的改动。
+记录 `muse_spark_debugmodel` 及相关清单配方在容器里的失败原因、速查对照与修复细节。只记本仓库仍要保留的改动；验收指标不达标（精度/线性度/内存）见 `docs/npu_gpu_acceptance_report.md`，不进本文件。
 
-**问题 → 改动速查（环境 A2）**：`docs/npu_problem_fix_index.md`。
+分支：`npu-muse-spark-debug-r04`。
 
-`make_reduction(..., strict_reduction=...)`、`NPUCombinedScheduling` 与 remat 空指针 storage，已经由 `torchtitan-ascend` 的 `refactor/npu-override` 覆盖：
+## 环境（A2）
 
-- 运行时：`torchtitan_ascend/patches/inductor.py`、`torchtitan_ascend/patches/storage.py`
-- 安装期：`fixes/torch_npu/storage.patch`
+| 项 | 值 |
+| --- | --- |
+| 环境代号 | **A2** |
+| 机器 / 容器 | `179.173.2.3` / `npu-y00839695-torchtitan-20261028`（多模态也曾在 `179.173.2.2`） |
+| 卡 | 8 × Ascend **910B4** |
+| 镜像 | CANN 9.2.0 910B Ubuntu22.04 py3.12 |
+| torch / torch_npu | `2.15.0+cpu` / `2.15.0.dev20261005+git14dc54e`（修复前曾用 `…+git95c7e46`） |
+| 训练入口 | `ENTRYPOINT=torchtitan_ascend.train`（勿用裸 `torchtitan.train`） |
+| 必打补丁 | `docs/npu_910b_patches/` + ascend Inductor/remat patches |
+| 编译线程 | `TORCHINDUCTOR_COMPILE_THREADS=1`，`TORCHNPU_PRECOMPILE_THREADS=1` |
 
-本文件不再展开这三处，代码侧也不再维护对应手工改法和 `torch_remat` 占位补丁，直接用上面的方案。
+换机：检出本分支 → 同版本 wheel → `bash docs/npu_910b_patches/apply_npu_910b_patches.sh` → `source docs/npu_910b_patches/env_npu_910b.sh` → ascend 入口。说明见 `docs/npu_910b_patches/README.md`。A5 只跑通见 `docs/npu_a5_acceptance_ops.md`。
+
+`make_reduction(..., strict_reduction=...)`、`NPUCombinedScheduling` 与 remat 空指针 storage，已由 **torchtitan-ascend** 覆盖（`torchtitan_ascend/patches/inductor.py`、`storage.py`；安装期 `fixes/torch_npu/storage.patch`）。本仓不再维护对应手工改法。
+
+---
+
+## 问题 → 改动对照表
+
+| # | 现象 / 失败 | 根因（一句话） | 改动落点 | 详情 |
+| --- | --- | --- | --- | --- |
+| 1 | flex 注册失败 `get_float32_precision` / `ModuleNotFoundError` | 旧 `torch_npu` 与 PyTorch 2.15 flex API 不匹配 | 换 wheel `…git14dc54e` | [§1](#1-注册-npu-inductor-时导入-flex-attention-失败) |
+| 2 | Inductor `SympifyError: [4, 4]` | NPU `NumelList` 被当成 list 送给 sympy | 当时本地改 sizevars；现行靠新 wheel | [§2](#2-融合时把-4-4-送给-sympy) |
+| 3 | RoPE / 视觉 RoPE `aclnnIndex` complex64 | 910B index 无 complex64 | `rope.py` / `vision_encoder.py` NPU `view_as_real` | [§3](#3-rope-用-complex64-做下标)、[§8](#8-视觉-rope-的-complex64-下标) |
+| 4 | SwiGLU / Helion CUDA 路径在 NPU 挂 | 融合 override 绑 CUDA | 非 CUDA `silu(gate)*up`；with_cp 清空 override | [§5](#5-融合-swiglu-没有-npu-实现) |
+| 5 | remat 反向段错误（空指针 storage） | NPU 上 null storage 不可用 | **torchtitan-ascend** `patches/storage.py` | [§9](#9-反向重算里的空指针占位张量) |
+| 6 | `make_reduction(..., strict_reduction=...)` | Inductor API 与 torch_npu 不一致 | **torchtitan-ascend** `patches/inductor.py` | 文首 ascend 说明 |
+| 7 | flex 反向多 rank 选块段错误 | 并行选块竞态 | 反向分块默认 16；autotune 文件锁 | [§6](#6-flex-attention-反向在-910b4-上段错误)、[§10](#10-8-个-rank-同时给-flex-attention-反向选块) |
+| 8 | 短视觉序列 → HCCL watchdog | flex decoding 另编核超时 | 非 950 关 decoding；`train_timeout=1800` | [§11](#11-短视觉序列的-flex-decoding-和-100-秒超时) |
+| 9 | 编译进程池 + flex 段错误 | 多线程编译不安全 | `COMPILE_THREADS=1` / `PRECOMPILE_THREADS=1` | [§6](#6-flex-attention-反向在-910b4-上段错误) |
+| 10 | loss `_assert_async` 编译卡住 | 0 维 device assert 代码生成挂 | 编译期跳过 assert | [§12](#12-词表断言和-fsdp-的-view-输出) |
+| 11 | FSDP 丢掉视觉输出 all-gather | 单帧 `cat` 是 view | `contiguous()` | [§12](#12-词表断言和-fsdp-的-view-输出) |
+| 12 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | commit `d0f5101f` |
+| 13 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§14](#14-dist-moe-bf16-在-910b-上的专家计算) |
+| 14 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | `f1c0e844` |
+| 15 | UltraData 拉 huggingface 被重置 | 出网受限 | 本地 JSONL | [§16](#16-第-5-行改读本地-ultradata-jsonl) |
+| 16 | ultradata 4 卡 EP8 ValueError | `ep` 须整除 `dp*cp*tp` | 线性度两侧 EP4 | `b188a02c` |
+| 17 | 裸 `torchtitan.train` 段错误 / make_reduction | 未走 ascend 入口 | 一律 `torchtitan_ascend.train` | acceptance 报告 |
+| 18 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§7](#7-上下文并行的-block-mask-求和被编成-simt_only) |
+| 19 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§15](#15-第-4-行多模态配方的训练超时) |
+
+### 未做 / 不可做
+
+| 项 | 说明 |
+| --- | --- |
+| Dist-MoE **mxfp8** | 第 3 行仅 bf16 / mxfp8 两个配方；mxfp8 配置期要官方 `dist_moe`/`torchao`，未改未跑。工作项里的「压缩 MoE 兼容」挂在 mxfp8 这条上，一并未验 |
+| Dist-MoE **GPU 对照** | A100 SM80，官方要 SM100 → 精度/性能/内存不可做 |
+| flex 与未改分块数值对拍 | 分块 16 只为稳定 |
+| FSDP view 警告全量追根 | 仅改了视觉 encoder 返回 |
+
+### 相关文档
+
+| 文档 | 用途 |
+| --- | --- |
+| `docs/npu_910b_patches/` | flex/heuristics 可复用补丁 |
+| `docs/npu_debugmodel_verification.md` | 按清单行跑通与验收 |
+| `docs/npu_gpu_acceptance_report.md` | NPU↔GPU 四指标 |
+| `docs/muse_acceptance_report_row1_2/` | 第 1–5 行报告 + 图 |
+| `docs/npu_a5_acceptance_ops.md` | A5 只跑通八配置 |
+
+---
 
 ## 可复用补丁（请先看这里）
 
@@ -20,13 +77,9 @@
 - 环境变量：`source docs/npu_910b_patches/env_npu_910b.sh`
 - 说明与版本钉扎：`docs/npu_910b_patches/README.md`
 
-换机器时：检出带这些文件的分支 → 装同版本 `torch_npu` → 跑 apply 脚本 → source env → 再跑训练。Inductor 接口对齐和 remat storage 走 `torchtitan-ascend`，不要再手工改 `lowering.py` / `npu_combined_scheduling.py` / `torch_remat/_placeholder.py`。
+不要再手工改 `lowering.py` / `npu_combined_scheduling.py` / `torch_remat/_placeholder.py`。
 
-环境：
-
-- `torch==2.15.0+cpu`
-- 修复前 `torch_npu==2.15.0+git95c7e46`（本地源码编出的 wheel，源码目录已不在）
-- 修复后 `torch_npu==2.15.0.dev20261005+git14dc54e`
+---
 
 ## 1. 注册 NPU inductor 时导入 flex attention 失败
 
@@ -222,15 +275,17 @@ HCCL watchdog 把还在集合通信里的 rank 打成 SIGABRT（exit -6）。`Nu
 
 ## 14. Dist-MoE bf16 在 910B 上的专家计算
 
-清单第 3 行的 `muse_spark_debugmodel_dist_moe_bf16` 原先过不了设备检查：
+清单第 3 行只有两个配方：`muse_spark_debugmodel_dist_moe_bf16`、`muse_spark_debugmodel_dist_moe_mxfp8`。原先 bf16 过不了设备检查：
 
 ```text
 ValueError: Dist-MoE requires an SM100-or-newer CUDA device
 ```
 
-`torchtitan/models/common/dist_moe/runtime.py` 要求 `device.type == "cuda"` 且计算能力主版本至少 10。910B 的 `device.type` 是 `npu`。可选包 `dist_moe` 和 `torchao` 都没装，装上包也过不了这道检查。mxfp8 配方在配置期就会调用 `dist_moe.BlockScaledConfig()`，这次没有改，也没有跑。
+`torchtitan/models/common/dist_moe/runtime.py` 要求 `device.type == "cuda"` 且计算能力主版本至少 10。910B 的 `device.type` 是 `npu`。可选包 `dist_moe` 和 `torchao` 都没装，装上包也过不了这道检查。
 
-bf16 的改动都在 torchtitan 里，不改 site-packages。CUDA 设备仍走原来的包和 SM100 检查。
+**mxfp8**：配置期就会调用 `dist_moe.BlockScaledConfig()`，NPU 旁路未接；工作项里的「压缩 MoE 兼容」挂在 mxfp8 的 `MXFP8LinearConverter` 上，**没有单独第三条配方**。mxfp8（及压缩 MoE 兼容）本次未改、未跑。
+
+bf16 的改动都在 torchtitan 里（`fc3aa0cf` 已入库），不改 site-packages。CUDA 设备仍走原来的包和 SM100 检查。
 
 `runtime.py` 在 NPU 上不再调用 `dist_moe.create_context`。换成 `_NpuDistMoeContext`，只实现 `select_activation_slot`、`reset`、`close`，并记下 `max_num_local_input_tokens`。流水线注册和关闭用的是这几个方法。专家的 scratch 不在这个对象里。
 
@@ -252,7 +307,7 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 
 `muse_spark_debugmodel_dist_moe_bf16` 在 `_with_dist_moe` 之后把 `disable_cuda_graphs` 设回 True。910B 没有 CUDA graph。`local_compile_regions` 收回 `loss`、`fp32_to_bf16_split`，`train_timeout_seconds=1800`。网格仍是基类的 4 卡 `dp_shard=2, tp=2, ep=2`。
 
-2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=4`，同一配置连跑两次（`/workspace/dist_moe_bf16_r2.log`、`r3.log`）。10 步 loss、grad_norm 逐项相同，loss 从 7.68369 到 5.36020，grad_norm 从 2.7578 到 1.6899。两趟都有 `Training completed` 和 `Process group destroyed`。逐步数字在 `docs/npu_debugmodel_verification.md` 第 3 行。没有 GPU 1000 步基线。mxfp8 和压缩 MoE 没有样本。
+2026-10-30 在 `179.173.2.3` 上，`HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`、`NGPU=4`，同一配置连跑两次（`/workspace/dist_moe_bf16_r2.log`、`r3.log`）。10 步 loss、grad_norm 逐项相同，loss 从 7.68369 到 5.36020，grad_norm 从 2.7578 到 1.6899。两趟都有 `Training completed` 和 `Process group destroyed`。逐步数字在 `docs/npu_debugmodel_verification.md` 第 3 行。没有 GPU 1000 步基线。
 
 ## 15. 第 4 行多模态配方的训练超时
 
@@ -287,4 +342,4 @@ debug 配方在 `_use_released_tokenizer_with_debug_model` 之后同样读 `MUSE
 2026-10-31 NPU 实测：`mem_1device`、`perf_dp2`、`perf_dp4` 均跑通（见 `docs/gpu_baseline_perf_mem.md` 实测表）。
 `perf_*` 需 `init_timeout_seconds=train_timeout_seconds=1800`，否则 8 卡首步 flex 编译会触发 HCCL watchdog。
 性能跑建议开 `MUSE_DEBUG_DETERMINISTIC=1`；未开时 4 卡曾在首步报非有限梯度。
-GPU 同配方尚未跑，性能/内存仍不能做达标判定。
+GPU 同配方已于 2026-11-02 补齐并完成对照（见 acceptance / `gpu_baseline_perf_mem.md`）。

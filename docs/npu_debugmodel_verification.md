@@ -2,7 +2,7 @@
 
 对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。每一行把配置、验证要点的分析、跑通数据、这一行的验收指标放在一起。
 
-机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。实测环境代号 **A2**。代码分支当前为 `npu-muse-spark-debug-r04`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 提交）。910B flex 两处 site-packages 补丁见 `docs/npu_910b_patches/`；Inductor / remat storage 走 `torchtitan-ascend` 的 patches，见 `docs/npu_pta_fixes.md`。跑任务踩坑与改动对照见 `docs/npu_problem_fix_index.md`。
+机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。实测环境代号 **A2**。代码分支当前为 `npu-muse-spark-debug-r04`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 提交）。910B flex 补丁见 `docs/npu_910b_patches/`；踩坑对照表与修复详情见 `docs/npu_pta_fixes.md`（Inductor / remat 走 `torchtitan-ascend`）。
 
 日志指标含义（各行共用，按代码而不是按名字猜）：
 
@@ -378,7 +378,7 @@ NGPU=8 MODULE=tests.integration_tests.models \
 | 配方 | `muse_spark_debugmodel_dist_moe_bf16`、`muse_spark_debugmodel_dist_moe_mxfp8`（`muse_spark.py` 187、204 行） |
 | 清单并行 | 4 卡（沿用基类 TP2 × EP2）。910B 没有 CUDA graph，这条 bf16 配方把 `disable_cuda_graphs` 设回 True |
 | 备注 | 上游 `dist_moe` 是 SM100 CuTe 包，`device.type == "npu"` 过不了设备检查，包本身也没装。bf16 在本机用 NPU 分组矩阵乘和现有 all-to-all |
-| 结果 | bf16 跑通，两次 loss、grad_norm 相同。mxfp8 和压缩 MoE 没跑 |
+| 结果 | bf16 跑通，两次 loss、grad_norm 相同。mxfp8 没跑（压缩 MoE 兼容挂在 mxfp8 上，一并未验） |
 
 NPU 旁路已在分支上（`fc3aa0cf`）：干净检出本分支即可跑 bf16；不依赖 SM100 的 `dist_moe` CuTe 包。下面是实现要点（写文档时曾有一版只在工作区、未入库，那句话已过时）。
 
@@ -414,7 +414,7 @@ NPU 旁路已在分支上（`fc3aa0cf`）：干净检出本分支即可跑 bf16�
 
 确定性。达标。NPU 两次 loss、grad_norm 逐项相同。
 
-mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期就会调用 `dist_moe.BlockScaledConfig()`，包不在就建不起配置。`torchao` 也不在。`npu_grouped_matmul_swiglu_quant` 是 INT8，不是 MXFP8。压缩 MoE 的兼容性没有做到可跑的对照。
+mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期就会调用 `dist_moe.BlockScaledConfig()`，包不在就建不起配置。`torchao` 也不在。`npu_grouped_matmul_swiglu_quant` 是 INT8，不是 MXFP8。第 3 行只有 bf16 / mxfp8 两个配方；工作项里的「压缩 MoE 兼容」挂在 mxfp8 的 converter 上，没有第三条独立 CONFIG，随 mxfp8 一并未验。
 
 ---
 

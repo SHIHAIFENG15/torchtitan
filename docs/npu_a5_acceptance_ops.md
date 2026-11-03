@@ -8,7 +8,7 @@
 | **A2** | 已跑通并完成指标验收的参考环境（`179.173.2.3` / `npu-y00839695-torchtitan-20261028`） |
 | **A5** | 本文件目标：只验证「训练循环能走完」 |
 
-踩坑对照：`docs/npu_problem_fix_index.md`。补丁：`docs/npu_910b_patches/`、`docs/npu_pta_fixes.md`。
+踩坑对照与补丁说明：`docs/npu_pta_fixes.md`；flex 补丁：`docs/npu_910b_patches/`。
 
 ---
 
@@ -19,7 +19,7 @@
 3. 成功标准：日志有 `Training completed` 且 `Process group destroyed`，退出码 0。确定性连跑两次、MAE、tps 线性度 **一律不做**。
 4. 一次一个 torchrun；8 卡任务前确认卡空闲。
 5. 日志写入 `logs/*_a5.log`，不要覆盖 A2 的 `*_npu.log`。
-6. 不要改核心代码除非用户授权；失败先查 `npu_problem_fix_index.md`。
+6. 不要改核心代码除非用户授权；失败先查 `docs/npu_pta_fixes.md` 文首对照表。
 
 ---
 
@@ -140,7 +140,7 @@ NGPU=8 MODULE=$SPARK CONFIG=muse_spark_debugmodel_ultradata_lora_sft \
 | --- | --- | --- | --- |
 | 1–8 | … | 通过 / 失败 / 预期跳过 | `logs/…` |
 
-3. 失败项：贴关键报错前 30 行，并注明是否已对照 `npu_problem_fix_index.md`
+3. 失败项：贴关键报错前 30 行，并注明是否已对照 `docs/npu_pta_fixes.md`
 
 **不要**提交精度曲线、不要改 A2 验收总表，除非用户另要求。
 
