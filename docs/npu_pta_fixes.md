@@ -42,7 +42,8 @@
 | # | 现象 / 失败 | 根因（一句话） | 落点（仅 r04） | 详情 |
 | --- | --- | --- | --- | --- |
 | E1 | UltraData 拉 huggingface 被重置 | 机房出网受限，`huggingface.co:443` 连接重置 | 本地 JSONL：`f99ea981`（`npu-muse-spark-debug-r04`） | [§14](#14-第-5-行改读本地-ultradata-jsonl) |
-| E2 | ultradata 4 卡 EP8 ValueError | `ep` 须整除 `dp*cp*tp`；线性度对照两侧改 EP4 | `b188a02c`（同上 r04） | 随 E1 |
+
+另：ultradata 4 卡线性度曾踩 `EP=8` 而 `dp*cp*tp=4` 不整除的 `ValueError`——这是**配方网格约束**，不是环境问题；r04 上 `b188a02c` 把 4 卡侧改成 EP4。本 code-fixes 分支无对应改动。
 
 ---
 
@@ -262,12 +263,12 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 
 ## 14. 第 5 行改读本地 UltraData JSONL
 
-属上表 **E1 / E2**（环境问题，非仓库缺陷）。
+属上表 **E1**（环境问题，非仓库缺陷）。
 
-对应改动只在 **`npu-muse-spark-debug-r04`**：`f99ea981`（本地 JSONL）、`b188a02c`（4 卡线性度 EP4）。**`npu-muse-spark-r04-code-fixes` 不含这些 recipe 改动。**
+对应改动只在 **`npu-muse-spark-debug-r04`**：`f99ea981`（本地 JSONL）。**`npu-muse-spark-r04-code-fixes` 不含该 recipe 改动。**
 
 `muse_spark_debugmodel_ultradata_lora_sft` 默认走 `HuggingFaceStreamingSource`（`openbmb/UltraData-SFT-Agent-2609`）。本机 `huggingface.co:443` 会被连接重置，流式数据起不来。r04 上 debug 配方改读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN` / 默认本地 JSONL，经 `IndexedJsonlSource` 交给 `_ultradata_sft_dataloader`。JSONL 不进 git（`assets/datasets/`）。
 
-4 卡性能对照时若仍用 EP8，会因 `ep` 不整除 `dp*cp*tp` 报 `ValueError`；r04 上线性度两侧改为 EP4（E2）。
+同波次里 4 卡线性度还曾因默认 `EP=8`、世界大小只有 4（`dp_shard=1, cp=2, tp=2`）触发整除检查失败；那是配方网格问题，r04 用 `b188a02c` 把 4 卡侧改成 EP4，与出网无关。
 
 2026-10-30 在 r04 + 本地数据上，`NGPU=8` 连跑两次 10 步可对齐；逐步数字在该分支的 `docs/npu_debugmodel_verification.md` 第 5 行。
