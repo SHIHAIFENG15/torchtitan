@@ -239,11 +239,38 @@ HCCL watchdog 把还在集合通信里的 rank 打成 SIGABRT（exit -6）。`Nu
 
 ## 6. 编译线程限制为 1
 
-分块改成 16 之后，训练能打完前几步，但 inductor 的编译子进程池在后面的 step 里段错误退出（日志里有 `SubprocPool unclean exit`）。
+### 在干什么
 
-`TORCHINDUCTOR_COMPILE_THREADS` 管的是 PyTorch 自己的编译进程池。`torch_npu` 另有 `precompile_thread_num`，默认至少 32，环境变量是 `TORCHNPU_PRECOMPILE_THREADS`。`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 flex attention 反向选块时，这个池子开了 128 个线程去测几十组配置，rank 0 段错误。
+`torch.compile` / Inductor 编核时，可以开一个**进程池或线程池**，并行编译、并行试很多组 kernel 配置。默认会开很多工人（几十上百），为的是编得快。
 
-`docs/npu_910b_patches/env_npu_910b.sh`（以及容器 `env.sh`）里把两者都设成 1，编译改在本进程做。这样 `muse_spark_debugmodel` 的 10 步可以跑完。
+这里有两路旋钮，名字很像，但是两套东西：
+
+| 环境变量 | 谁在用 | 干什么 |
+| --- | --- | --- |
+| `TORCHINDUCTOR_COMPILE_THREADS` | PyTorch Inductor | 编译子进程池大小 |
+| `TORCHNPU_PRECOMPILE_THREADS` | `torch_npu` | NPU 侧预编译 / 选配置时的并行度（默认往往 ≥32） |
+
+### 问题
+
+§4 把反向 tile 钉成 16 之后，前几步能跑了，但后面某个 step 仍可能崩：日志出现 `SubprocPool unclean exit`——**编译子进程异常退出**。  
+更重的一例：`muse_spark_debugmodel_fsdp2_cp2_ep4` 在 flex 反向选块时，`TORCHNPU_PRECOMPILE_THREADS` 一侧开到约 128 个工人去测几十组配置，rank 0 **段错误**。
+
+和 §4「多 rank 文件锁」不同：§4 管的是 **多个训练进程（rank）** 不要同时选块；本节管的是 **单个 rank 内部** 不要用一大坨编译工人并行干活。910B4 上这套多工人编译/预编译不稳。
+
+### 改法
+
+`docs/npu_910b_patches/env_npu_910b.sh`（以及容器 `env.sh`）里两套都设成 **1**：
+
+```bash
+export TORCHINDUCTOR_COMPILE_THREADS=1
+export TORCHNPU_PRECOMPILE_THREADS=1
+```
+
+效果：编译和预编译改在**当前训练进程里串行做**，不再拉一堆子进程/线程并行试。编得慢一些，但 `muse_spark_debugmodel` 能跑完 10 步。
+
+### 边界
+
+这是环境变量，不是改 flex 公式。训练前需要 `source docs/npu_910b_patches/env_npu_910b.sh`（或等价写入容器 env）。
 
 ## 7. 词表断言在编译期跳过
 
