@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Apply or restore the Ascend 910B site-package patches shipped next to this script.
+# Apply or restore the Ascend 910B flex site-package patches shipped next to this script.
+# Remat / Inductor API fixes live in torchtitan-ascend; do not add them here.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +33,6 @@ fi
 declare -a TARGETS=(
   "torch_npu/_inductor/kernel/flex_attention.py|flex_attention.py.patch|659bf1dbc6c9652d8a5fdf9dad9bedeb"
   "torch_npu/_inductor/runtime/triton_heuristics.py|triton_heuristics.py.patch|e0fcd810ba31c602be44fb7c5e49b058"
-  "torch_remat/_placeholder.py|torch_remat_placeholder.py.patch|f3d63fe46a039b58da3c39bdd3152e6a"
 )
 
 md5_of() {

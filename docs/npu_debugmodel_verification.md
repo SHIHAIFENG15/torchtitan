@@ -2,7 +2,7 @@
 
 对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。Glimmer 不跑。每一行把配置、验证要点的分析、跑通数据、这一行的验收指标放在一起。
 
-机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。代码分支当前为 `npu-muse-spark-debug-r04`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 提交）。site-packages 三处 PTA 补丁仍不在 git 里，见 `docs/npu_pta_fixes.md`。
+机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。代码分支当前为 `npu-muse-spark-r04-code-fixes`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 代码修复）。910B flex 两处 site-packages 补丁见 `docs/npu_910b_patches/`；Inductor / remat storage 走 `torchtitan-ascend`，见 `docs/npu_pta_fixes.md`。
 
 日志指标含义（各行共用，按代码而不是按名字猜）：
 
@@ -22,7 +22,7 @@ GPU 机器上的环境、四项缺数和取数步骤写在 `docs/gpu_baseline_se
 
 ## 2026-10-29 切到 release/0.4 之后的重跑
 
-`pytorch/torchtitan` 的 `release/0.4` 顶端仍是 v0.4.0（`45e33cd4`，2026-10-28）。本地分支 `npu-muse-spark-debug-r04` 就在这个点上，另有 6 个 NPU 提交，HEAD `d0f5101f`。旧验收跑在 `npu-muse-spark-debug`（`0861159b`，基线 `688704a6`）上。两棵树的 Muse Spark 模型不同：v0.4.0 默认打开 RoPE、RMSNorm、attention 编译区，`torch_remat` 为 0.2.2，flex attention 为 `fullgraph=True`。
+`pytorch/torchtitan` 的 `release/0.4` 顶端仍是 v0.4.0（`45e33cd4`，2026-10-28）。本地分支 `npu-muse-spark-r04-code-fixes` 含上述 NPU 代码修复（不含 UltraData 本地 JSONL 等环境绕过）。旧验收跑在 `npu-muse-spark-debug`（`0861159b`，基线 `688704a6`）上。两棵树的 Muse Spark 模型不同：v0.4.0 默认打开 RoPE、RMSNorm、attention 编译区，`torch_remat` 为 0.2.2，flex attention 为 `fullgraph=True`。
 
 直接在新默认上跑 4 卡 `with_cp`（`with_cp_4card_r2.log`）会在第 1 步反向失败：`torch.utils.checkpoint.CheckpointError`，重算张量从 position 30 起和正向保存的错位，NPU 上的 `[245, 1]` float32 重算成 CPU 标量。debug 配方因此把 `local_compile_regions` 收回到旧的 `loss`、`fp32_to_bf16_split`（`torchtitan_recipes/tests/models/muse_spark.py`，尚未提交）。`debugmodel_mm` 会换掉 model config，同样收回。确定性重跑另加 `HCCL_DETERMINISTIC=true`、`MUSE_DEBUG_DETERMINISTIC=1`（`debug.seed=42`，`debug.deterministic=True`）。卡是 0、2、3、6。1 号卡从约 15:12 CST 起被 `pytest test_nested_reduction.py` 占着，没有动它。
 
@@ -340,7 +340,7 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 这次能跑完，靠的是下面几处改动，细节在 `docs/npu_pta_fixes.md`：
 
 - 视觉 RoPE 的 complex64 下标不走 `rope.py` 那一处，910B 的 index 没有 complex64。
-- `torch_remat` 在 NPU 上不再用空指针 storage 做占位张量。空指针在反向重算里会段错误。
+- remat 空指针 storage 占位由 `torchtitan-ascend` 的 storage patch 覆盖，本仓不再打 `torch_remat` 手工补丁。
 - 8 个 rank 一起给 flex attention 反向选块时，会有一个 rank 段错误。选块改成跨进程串行。
 - 非 Ascend 950 不用 flex decoding。短视觉序列会另编一套核，编译时间超过原来的 100 秒训练超时，先跑完的 rank 把 all-gather 拖超时，HCCL watchdog 以 SIGABRT 退出。
 - 这条配方的 `train_timeout_seconds` 设为 1800，盖住第 5 步、第 8 步那种新长度编译。
@@ -353,15 +353,14 @@ memory 第 1 步 0.09GiB，其后 0.11GiB。tps 两次不一致，和以前一�
 
 #### 换机器复现这条 8 卡
 
-只拉分支不够。8 卡能跑完，还靠三份装在 site-packages 里的文件，它们不在 git 里。换机器时先装同一份 wheel 和 `torch_remat==0.2.2`，再把这三份盖上去。本机路径前缀是 `/home/npu-work/npu-y00839695-torchtitan-20261028/`，容器里是 `/workspace/`。
+只拉分支不够。8 卡能跑完，还靠 `docs/npu_910b_patches/` 里的 flex 补丁，以及 `torchtitan-ascend` 的 remat / Inductor 覆盖。换机器时先装同一份 wheel，再 `bash docs/npu_910b_patches/apply_npu_910b_patches.sh` 并 `source docs/npu_910b_patches/env_npu_910b.sh`，训练入口用 `ENTRYPOINT=torchtitan_ascend.train`。本机路径前缀是 `/home/npu-work/npu-y00839695-torchtitan-20261028/`，容器里是 `/workspace/`。
 
 | 文件 | md5 | 盖住之后的行为 |
 | --- | --- | --- |
 | `torch_npu/_inductor/kernel/flex_attention.py` | `659bf1dbc6c9652d8a5fdf9dad9bedeb` | 非 950 不用 mask-out，反向分块默认 16；`_use_flex_decoding` 在非 950 上返回 false |
 | `torch_npu/_inductor/runtime/triton_heuristics.py` | `e0fcd810ba31c602be44fb7c5e49b058` | 非 950 不为 `simd_simt_mix` 生成 `simt_only`；名字里带 `flex_attention` 的 autotune 用 `fcntl` 锁 `/tmp/npu_flex_attention_autotune.lock` |
-| `torch_remat/_placeholder.py` | `f3d63fe46a039b58da3c39bdd3152e6a` | NPU 上占位张量用 `empty_strided`，不再把空指针 `set_` 成真实形状 |
 
-和 8 卡有关的提交，按当时尖端 `0861159b` 往前看：`49cbb4d3` 处理 `rope.py` 的 complex64 下标，并把非 CUDA 的 SwiGLU 改成 `silu(gate) * up`；`986e693c` 在 Dist-MoE 导入失败时跳过，并探测 FSDP `MixedPrecisionPolicy`；`16db70a0` 处理视觉 RoPE 的 complex64 下标、loss 里编译期跳过 `_assert_async`、视觉输出 `contiguous()`、这条配方的 `train_timeout_seconds=1800`；`0861159b` 把启动用的 `init_timeout_seconds` 保持在 300，1800 只写在配方里。当前分支名是 `npu-muse-spark-debug-r04`，基于 `release/0.4`。2.2 复验时分支从 `38347913` 对齐到 `0861159b`，三份文件 md5 与上表相同。
+和 8 卡有关的提交，按当时尖端 `0861159b` 往前看：`49cbb4d3` 处理 `rope.py` 的 complex64 下标，并把非 CUDA 的 SwiGLU 改成 `silu(gate) * up`；`986e693c` 在 Dist-MoE 导入失败时跳过，并探测 FSDP `MixedPrecisionPolicy`；`16db70a0` 处理视觉 RoPE 的 complex64 下标、loss 里编译期跳过 `_assert_async`、视觉输出 `contiguous()`、这条配方的 `train_timeout_seconds=1800`；`0861159b` / `d0f5101f` 把启动用的 `init_timeout_seconds` 保持在 300，1800 只写在配方里。当前分支名是 `npu-muse-spark-r04-code-fixes`。2.2 复验时 flex 两份文件 md5 与上表相同；remat storage 改走 torchtitan-ascend。
 
 环境（训练在容器里，不在宿主机的 Python 里）：
 
