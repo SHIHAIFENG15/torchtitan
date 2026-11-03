@@ -1,6 +1,6 @@
 # Muse Spark 在 910B 上的 NPU 修复记录
 
-记录 `muse_spark_debugmodel` 及相关清单配方在容器里的失败原因、速查对照与修复细节。本仓代码 / 补丁问题进对照表；ascend 覆盖进 A 表；纯环境问题进 E 表（对应代码只在 `npu-muse-spark-debug-r04`）。验收指标不达标不进本文件。
+记录 `muse_spark_debugmodel` 及相关清单配方在容器里的失败原因、速查对照与修复细节。本仓代码 / 补丁问题进对照表；ascend 覆盖进 A 表；纯环境问题进 E 表（对应代码只在 `npu-muse-spark-debug-r04`）。本分支只关心**跑通**，不收录精度 / 线性度 / 内存 / 确定性验收改动。
 
 分支：`npu-muse-spark-r04-code-fixes`。
 
@@ -62,14 +62,13 @@
 | 11 | 裸 `torchtitan.train` 段错误 / 再撞 make_reduction | 未走 ascend 入口，A 表补丁未生效 | 一律 `torchtitan_ascend.train` | 并见上表 A1–A3 |
 | 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
 | 13 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
-| 14 | ultradata 4 卡默认 EP8 → ValueError | `ep` 须整除 `dp*cp*tp`；4 卡世界为 4 | `perf_dp1` 用 EP4；EP 可传参 | [§15](#15-ultradata-4-卡-ep-须整除世界大小) |
 
 ### 未做 / 不可做
 
 | 项 | 说明 |
 | --- | --- |
 | Dist-MoE **mxfp8** | 第 3 行仅 bf16 / mxfp8 两个配方；mxfp8 配置期要官方 `dist_moe`/`torchao`，未改未跑。工作项里的「压缩 MoE 兼容」挂在 mxfp8 这条上，一并未验 |
-| Dist-MoE **GPU 对照** | A100 SM80，官方要 SM100 → 精度/性能/内存不可做 |
+| 精度 / 线性度 / 内存 / 确定性验收 | 本分支不做；不为四项指标加 perf/mem 配方或对照改动 |
 | flex 与未改分块数值对拍 | 分块 16 只为稳定 |
 | FSDP view 警告全量追根 | 仅改了视觉 encoder 返回 |
 
@@ -78,7 +77,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | `docs/npu_910b_patches/` | flex/heuristics 可复用补丁 |
-| `docs/npu_debugmodel_verification.md` | 按清单行跑通与验收 |
+| `docs/npu_debugmodel_verification.md` | 按清单行跑通记录（非四项验收） |
 
 ---
 
@@ -268,10 +267,4 @@ RuntimeError: remat.region 'dispatch' was called with recompute=True while neste
 
 `muse_spark_debugmodel_ultradata_lora_sft` 默认数据集 `openbmb/UltraData-SFT-Agent-2609`。本机 `huggingface.co:443` 会被连接重置，流式数据起不来。r04 上改读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN` / 本地 JSONL（`IndexedJsonlSource`）。JSONL 不进 git（`assets/datasets/`）。
 
-## 15. ultradata 4 卡 EP 须整除世界大小
-
-属上表 **#14**（配方代码问题，本分支收录）。
-
-清单第 5 行 8 卡网格是 `dp_shard=2, cp=2, tp=2, ep=8`（`ep` 整除 `dp*cp*tp=8`）。做 4 卡线性度时把 `data_parallel_shard_degree` 改成 1 后，世界大小变成 4，若仍用 `ep=8` 会在并行度校验处 `ValueError`。
-
-本分支：`muse_spark_debugmodel_ultradata_lora_sft` 增加 `expert_parallel_degree` / `data_parallel_shard_degree` 参数；`muse_spark_debugmodel_ultradata_lora_sft_perf_dp1` 显式 `expert_parallel_degree=4`。不改默认 8 卡 10 步配方的 EP。与 E1 出网绕过无关，也不依赖本地 JSONL。
+不为线性度 / 性能对照另开 4 卡 EP 配方；本分支只保留清单默认 8 卡 10 步跑通配置。

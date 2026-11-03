@@ -1,10 +1,12 @@
-# Muse Spark debugmodel 验收
+# Muse Spark debugmodel 跑通记录
 
-对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。Glimmer 不跑。每一行把配置、验证要点的分析、跑通数据、这一行的验收指标放在一起。
+对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。Glimmer 不跑。每一行保留配置、验证要点与跑通数据。
 
-机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。代码分支当前为 `npu-muse-spark-r04-code-fixes`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 代码修复）。910B flex 两处 site-packages 补丁见 `docs/npu_910b_patches/`；Inductor / remat storage 走 `torchtitan-ascend`，见 `docs/npu_pta_fixes.md`。
+**本分支（`npu-muse-spark-r04-code-fixes`）不再做精度 / 线性度 / 内存 / 确定性四项验收**；下文若仍出现「达标 / 不达标」字样，仅作历史记录，不作为当前目标。不为四项指标保留或新增 perf/mem 配方改动。
 
-日志指标含义（各行共用，按代码而不是按名字猜）：
+机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。910B flex 两处 site-packages 补丁见 `docs/npu_910b_patches/`；Inductor / remat storage 走 `torchtitan-ascend`，见 `docs/npu_pta_fixes.md`。
+
+日志字段含义（各行共用）：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -13,10 +15,6 @@
 | memory | 这一步窗口里的最大预留显存。第 1 步把编译也算进去，所以往往比后面高。容量按日志是 Ascend910B4 29.49GiB |
 | tps | 单卡 token/s：`每步每 DP rank 的配置 token 数 / (这一步耗时 × CP × TP × PP)`。debugmodel 的配置 token 数是 512。它不是墙钟吞吐，也不含编译 |
 | tflops / mfu | 由每 token FLOPs 乘 tps 得到。MFU 分母回退为 A100 峰值 `3.120e14`（日志：`Peak flops undefined for: Ascend910B4`）。debugmodel 太小，mfu 打出来是 0.00%，不能当 910B 利用率 |
-
-没有同场景 GPU 基线时，不编造对比数。验收标准本身是四项：精度、性能、内存、确定性。下面写在对应行里，标准全文不另起一章重复。
-
-GPU 机器上的环境、四项缺数和取数步骤写在 `docs/gpu_baseline_setup.md`。NPU 上的表不要改成 GPU 的数。
 
 ---
 
