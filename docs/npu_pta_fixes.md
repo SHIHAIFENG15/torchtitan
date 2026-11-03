@@ -2,6 +2,8 @@
 
 记录 `muse_spark_debugmodel` 及相关清单配方在容器里的失败原因和修复。只记本仓库仍要保留的改动。
 
+**问题 → 改动速查（环境 A2）**：`docs/npu_problem_fix_index.md`。
+
 `make_reduction(..., strict_reduction=...)`、`NPUCombinedScheduling` 与 remat 空指针 storage，已经由 `torchtitan-ascend` 的 `refactor/npu-override` 覆盖：
 
 - 运行时：`torchtitan_ascend/patches/inductor.py`、`torchtitan_ascend/patches/storage.py`

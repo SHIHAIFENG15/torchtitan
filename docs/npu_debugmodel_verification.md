@@ -2,7 +2,7 @@
 
 对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。每一行把配置、验证要点的分析、跑通数据、这一行的验收指标放在一起。
 
-机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。代码分支当前为 `npu-muse-spark-debug-r04`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 提交）。910B flex 两处 site-packages 补丁见 `docs/npu_910b_patches/`；Inductor / remat storage 走 `torchtitan-ascend` 的 patches，见 `docs/npu_pta_fixes.md`。
+机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。实测环境代号 **A2**。代码分支当前为 `npu-muse-spark-debug-r04`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 提交）。910B flex 两处 site-packages 补丁见 `docs/npu_910b_patches/`；Inductor / remat storage 走 `torchtitan-ascend` 的 patches，见 `docs/npu_pta_fixes.md`。跑任务踩坑与改动对照见 `docs/npu_problem_fix_index.md`。
 
 日志指标含义（各行共用，按代码而不是按名字猜）：
 
@@ -380,7 +380,7 @@ NGPU=8 MODULE=tests.integration_tests.models \
 | 备注 | 上游 `dist_moe` 是 SM100 CuTe 包，`device.type == "npu"` 过不了设备检查，包本身也没装。bf16 在本机用 NPU 分组矩阵乘和现有 all-to-all |
 | 结果 | bf16 跑通，两次 loss、grad_norm 相同。mxfp8 和压缩 MoE 没跑 |
 
-NPU 路径在工作区，还没提交。干净检出跑不了这条。
+NPU 旁路已在分支上（`fc3aa0cf`）：干净检出本分支即可跑 bf16；不依赖 SM100 的 `dist_moe` CuTe 包。下面是实现要点（写文档时曾有一版只在工作区、未入库，那句话已过时）。
 
 - `torchtitan/models/common/dist_moe/npu.py`：专家计算用 `npu_grouped_matmul`。权重从 `[E, out, in]` 转成 `[E, in, out]`，`group_list` 是 int64 前缀和，`split_item=3`、`group_type=0`、`group_list_type=0`。激活用 `npu_swiglu`（最后一维对半，先 gate 后 up）。
 - token 交换仍是仓库里的 `AllToAllTokenDispatcher._dispatch` / `_combine`，不是 `npu_moe_distribute_dispatch`。公共 `dispatch()` / `combine()` 会再开默认重算的 `dispatch`、`combine` 区域。外层 `dist_moe` 是保存区域，里面不能再套重算区域。`/workspace/dist_moe_bf16_r1.log` 就是这个报错，没有 step。
