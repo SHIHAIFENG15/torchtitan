@@ -35,13 +35,14 @@
 
 ---
 
-## 环境问题（非本仓代码问题）
+## 环境 / 启动方式（非本仓代码问题）
 
-机房/出网等环境限制，**不是** torchtitan 仓库缺陷。绕过代码只在 `npu-muse-spark-debug-r04`，**不**合入 `npu-muse-spark-r04-code-fixes`。
+机房出网、训练入口选错等，**不是** torchtitan 仓库里要合入的修复。E1 的绕过代码只在 `npu-muse-spark-debug-r04`；E2 无本仓改动，装好 `torchtitan-ascend` 后改入口即可。
 
-| # | 现象 / 失败 | 根因（一句话） | 落点（仅 r04） | 详情 |
+| # | 现象 / 失败 | 根因（一句话） | 落点 | 详情 |
 | --- | --- | --- | --- | --- |
-| E1 | UltraData 拉 huggingface 被重置 | 机房出网受限，`huggingface.co:443` 连接重置 | 本地 JSONL：`f99ea981`（`npu-muse-spark-debug-r04`） | [§14](#14-第-5-行改读本地-ultradata-jsonl) |
+| E1 | UltraData 拉 huggingface 被重置 | 机房出网受限，`huggingface.co:443` 连接重置 | 本地 JSONL：`f99ea981`（仅 `npu-muse-spark-debug-r04`） | [§14](#14-第-5-行改读本地-ultradata-jsonl) |
+| E2 | 裸 `torchtitan.train` 段错误 / 再撞 make_reduction | 未走 ascend 入口，A1–A3 补丁未加载 | `ENTRYPOINT=torchtitan_ascend.train` | 见上文 A 表 |
 
 ---
 
@@ -59,9 +60,8 @@
 | 8 | 全局 `init_timeout=1800` 过猛 | 启动与训练超时混用 | init 保持 300；1800 只写配方 | commit `d0f5101f` |
 | 9 | Dist-MoE 要 SM100 | CuTe 包 / 设备检查 | `dist_moe/npu.py` 等，`fc3aa0cf` | [§12](#12-dist-moe-bf16-在-910b-上的专家计算) |
 | 10 | Dist-MoE / FSDP policy 导入失败 | 可选依赖过硬 | 软探测跳过 | `f1c0e844` |
-| 11 | 裸 `torchtitan.train` 段错误 / 再撞 make_reduction | 未走 ascend 入口，A 表补丁未生效 | 一律 `torchtitan_ascend.train` | 并见上表 A1–A3 |
-| 12 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
-| 13 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
+| 11 | CP block mask → `simt_only` 失败 | 非 950 不支持 | heuristics 补丁 | [§5](#5-上下文并行的-block-mask-求和被编成-simt_only) |
+| 12 | 第 4 行默认 100s 超时 | 视觉变长重编译 | `train_timeout_seconds=1800` | [§13](#13-第-4-行多模态配方的训练超时) |
 
 ### 未做 / 不可做
 
