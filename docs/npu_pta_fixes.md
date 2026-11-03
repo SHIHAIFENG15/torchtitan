@@ -314,11 +314,19 @@ export TORCHNPU_PRECOMPILE_THREADS=1
 
 ### 在干什么
 
-`NaViTEncoder` 前向最后把各帧结果 `torch.cat` 拼成一块，交给后面的 FSDP 等模块。FSDP 在反向前需要对自己管理的参数做 **all-gather**；若模块输出只是别的张量的 **view**（共享同一块存储、不是独立连续块），某些就地（in-place）算子会破坏 FSDP 的约定，导致 **pre-backward all-gather 被丢掉**，数值/通信会错。
+**FSDP**（Fully Sharded Data Parallel）把参数切到各卡，用时 **all-gather** 拼起来算，算完再切回。反向前靠挂在模块输出上的 **pre-backward hook** 触发参数 all-gather。
+
+`NaViTEncoder` 前向最后把各帧结果 `torch.cat` 拼成一块再往下传。若这个输出只是别的张量的 **view**（共享存储），后面再对它做就地（in-place）改写时，autograd 可能把 FSDP 的 hook 「改写丢了」，于是 **pre-backward all-gather 被跳过**，数值/通信会错。
 
 ### 问题
 
-只有 **一帧** 时，`torch.cat([那一帧])` 往往直接返回原张量本身，在 FSDP 眼里就是 view，不满足「模块输出应是独立存储」的预期。
+只有 **一帧** 时，`torch.cat([那一帧])` 往往直接返回原张量本身，在 FSDP 眼里就是 view。
+
+### 是不是只有 910B / 上游不知道？
+
+**不是 910B 专有 bug。** 这是 FSDP（含 FSDP2）与「forward 输出为 view + 后续 in-place」组合下的**已知风险**：上游有相关 issue，也加过「grad 所需的 forward 输出是 view」一类 **UserWarning**；框架侧是否一律自动 clone 仍可能在跟进。CUDA 上同样结构可以踩。
+
+本仓库是在 910B 多模态路径上撞到 **这个调用点**（单帧 `cat`），用 `contiguous()` 做模型侧规避。verification 里还出现过其它模块（如 Transformer block）返回 view 的 FSDP 警告，当时未全量追完（见文首「未做」表）。
 
 ### 改法
 
@@ -328,11 +336,11 @@ export TORCHNPU_PRECOMPILE_THREADS=1
 return torch.cat(outputs).contiguous()
 ```
 
-`contiguous()` 保证得到一块连续、独立的存储，FSDP 不再把输出当成危险的 view。
+`contiguous()` 保证得到一块连续、独立的存储，避免把该输出当成危险的 view。
 
 ### 边界
 
-这次只改了视觉 encoder 这一处。音频编码器、文本 block 上若有同类警告，本轮未改。
+这次只改了视觉 encoder 这一处。音频编码器、文本 block 上若有同类警告，本轮未改。不声称已从上游 FSDP 根治所有 view 问题。
 
 ## 9. init timeout 保持 300
 
