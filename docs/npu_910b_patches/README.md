@@ -25,11 +25,17 @@ Expected MD5 after apply:
 ## What each patch does
 
 1. `flex_attention.py.patch`
-   - Non-950: disable mask-out; disable flex decoding; default backward tiles to 16.
+   - Non-950: pointwise `aten.index` for mask subgraphs when indirect-memory
+     codegen is off; disable mask-out; disable flex decoding; default
+     backward tiles to 16.
 2. `triton_heuristics.py.patch`
    - Non-950: do not emit `simt_only` for `simd_simt_mix`.
    - Serialize multi-rank `flex_attention` autotune with
      `/tmp/npu_flex_attention_autotune.lock`.
+
+Checklist of all flex non-950 adaptation points (including env compile
+threads and recipe timeouts): see
+`docs/npu_pta_fixes.md` section **flex attention 非 Ascend 950 适配点**.
 
 ## Apply
 
