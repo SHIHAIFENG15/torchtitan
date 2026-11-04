@@ -2,7 +2,12 @@
 
 对照 `docs/muse模型适配专项/muse模型适配工作项清单.xlsx` 的 **Muse Spark** 表，按第 1 到第 5 行写。每一行把配置、验证要点的分析、跑通数据、这一行的验收指标放在一起。
 
-机器：`179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`）为主；8 卡多模态也曾在 `179.173.2.2` 对齐复验。实测环境代号 **A2**。代码分支当前为 `npu-muse-spark-debug-r04`（基于 `pytorch/torchtitan` 的 `release/0.4` + NPU 提交）。910B flex 补丁见 `docs/npu_910b_patches/`；踩坑对照表与修复详情见 `docs/npu_pta_fixes.md`（Inductor / remat 走 `torchtitan-ascend`）。
+| 环境 | 机器 | 卡 | 角色 |
+| --- | --- | --- | --- |
+| **A2** | `179.173.2.3`（容器 `npu-y00839695-torchtitan-20261028`；8 卡多模态也曾在 `179.173.2.2`） | 8 × **910B4** | 主验收：跑通 + 精度 / 性能 / 内存 / 确定性 |
+| **A5** | `141.61.49.192`（详情 `docs/npu_a5_run_results.md`） | 8 × **950PR** | 只复验「训练循环跑通」；**无额外代码适配**（未打 `docs/npu_910b_patches/`，950 走原生 flex） |
+
+代码分支 `npu-muse-spark-debug-r04`（`release/0.4` + NPU）。910B flex 补丁：`docs/npu_910b_patches/`。踩坑对照：`docs/npu_pta_fixes.md`（Inductor / remat 走 `torchtitan-ascend`）。各配置开篇用「跑通」表对照 A2 / A5；下文数据与四项指标仍是 A2。
 
 日志指标含义（各行共用，按代码而不是按名字猜）：
 
@@ -33,7 +38,11 @@ GPU 机器上的环境、缺数和取数步骤写在 `docs/gpu_baseline_setup.md
 | 清单并行 | 单卡；dim 256 / 8 层 / 8 experts；seq_len 512；10 步 |
 | 实际网格 | 跟配方默认，不是单卡：`pp=1, dp_replicate=1, dp_shard=2, cp=1, tp=2, ep=2`，4 卡。世界大小 `1 × 2 × 1 × 2 × 1 = 4`。EP 从这 4 个进程里分专家，不另加进程。序列并行跟着张量并行，也不另加进程 |
 | 数据 / 优化 | `tests/assets/c4_test/data.json`，`shuffle=False`；AdamW lr=`8e-4`，warmup 2；词表 2048；`checkpointer=None` |
-| 结果 | 训练循环跑通。正式对照用确定性两次：`det_debugmodel_r04_r1/r2.log`（与旧 `item2_logs/det_debugmodel_r1.log` 的 10 步 loss/grad_norm 相同；`HCCL_DETERMINISTIC=true`，`seed=42`，`debug.deterministic=True`，`deterministic_warn_only` 保持默认 False） |
+
+| 跑通 | 状态 | 证据 |
+| --- | --- | --- |
+| A2 | ✅ | 确定性两次（`seed=42`，`HCCL_DETERMINISTIC=true`）：10 步 loss/grad_norm 逐项相同（见下表）；`Training completed` |
+| A5 | ✅ | 2026-11-04，4 卡，`Training completed` |
 
 配置核对：
 
@@ -165,7 +174,11 @@ GPU 机器上的环境、缺数和取数步骤写在 `docs/gpu_baseline_setup.md
 | 清单 | 4 卡：TP2 × EP2 × CP2；Ulysses CP |
 | 实际网格 | `dp_shard=1, tp=2, ep=2, cp=2, SP=True`，世界大小 4。`train_timeout_seconds=1800`；`override.imports=[]`（去掉 CUDA Helion/SwiGLU） |
 | CP 算法 | Ulysses（`_muse_spark_context_parallel_transform`） |
-| 结果 | 跑通。先有一趟没开确定性的 `with_cp_4card_r3.log`（只证明反向走完）。正式对照：`det_with_cp_r04_r1/r2.log`，10 步 loss、grad_norm 逐项相同 |
+
+| 跑通 | 状态 | 证据 |
+| --- | --- | --- |
+| A2 | ✅ | 确定性两次：10 步 loss/grad_norm 逐项相同（见下表）；`Training completed` |
+| A5 | ✅ | 2026-11-04，4 卡，`Training completed` |
 
 | step | loss | grad_norm |
 | --- | --- | --- |
@@ -200,7 +213,11 @@ GPU 机器上的环境、缺数和取数步骤写在 `docs/gpu_baseline_setup.md
 | 项 | 内容 |
 | --- | --- |
 | 网格 | `dp_shard=2, cp=2, tp=1, ep=4`，4 卡；AllGatherKV CP |
-| 结果 | 跑通。2026-10-28 先有一趟非确定性：2、3、4、5 号卡，10 步退出码 0，loss 7.76808→5.02892，grad_norm 4.6650→1.6260。正式对照：`det_fsdp2_r04_r1/r2.log`（与旧 `item2_logs/det_fsdp2_r1.log` 的 10 步 loss/grad_norm 相同） |
+
+| 跑通 | 状态 | 证据 |
+| --- | --- | --- |
+| A2 | ✅ | 确定性两次：10 步 loss/grad_norm 逐项相同（见下表）；`Training completed` |
+| A5 | ✅ | 2026-11-04，4 卡，`Training completed` |
 
 | step | loss | grad_norm | r1 memory | r1 tps | r2 memory | r2 tps |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -239,7 +256,11 @@ GPU 机器上的环境、缺数和取数步骤写在 `docs/gpu_baseline_setup.md
 | 模型 | 文本 dim 256、8 层、8 专家、词表 2048、序列 512、10 步。视觉是 NaViT，head_dim 16 |
 | 数据 | `tests/assets/cc12m_test/cc12m-train-0000.tar`，加合成音频、视频。每 DP rank 512 token、每步 1024 token |
 | 超时 | 启动用的 `init_timeout_seconds` 保持 300。第 1 步之后这条配方自己把 `train_timeout_seconds` 设为 1800。日志是 `Synchronizing and adjusting timeout for all ProcessGroups to 0:30:00` |
-| 结果 | **2.3** 跑通：`item2_logs/mm_r12.log`，2026-10-28 11:02–11:07 UTC，`Training completed`，`Process group destroyed`，没有 `ChildFailedError`。**2.2** 对齐后复验：`mm_2.2_8card.log`，2026-10-29。两趟都没有开确定性种子 |
+
+| 跑通 | 状态 | 证据 |
+| --- | --- | --- |
+| A2 | ✅ | 2026-10-28（2.3）与 2026-10-29（2.2）均 8 卡 `Training completed`；10 步 loss/grad_norm 见下表（未开确定性种子） |
+| A5 | ⏸ | 8 卡未完成：共享机 vLLM 占 NPU7，HCCL `hcclCommInitRootInfoConfig error 4`；待补跑 |
 
 2.3（`mm_r12.log`）：
 
@@ -378,7 +399,11 @@ NGPU=8 MODULE=tests.integration_tests.models \
 | 配方 | `muse_spark_debugmodel_dist_moe_bf16`、`muse_spark_debugmodel_dist_moe_mxfp8`（`muse_spark.py` 187、204 行） |
 | 清单并行 | 4 卡（沿用基类 TP2 × EP2）。910B 没有 CUDA graph，这条 bf16 配方把 `disable_cuda_graphs` 设回 True |
 | 备注 | 上游 `dist_moe` 是 SM100 CuTe 包，`device.type == "npu"` 过不了设备检查，包本身也没装。bf16 在本机用 NPU 分组矩阵乘和现有 all-to-all |
-| 结果 | bf16 跑通，两次 loss、grad_norm 相同。mxfp8 没跑（压缩 MoE 兼容挂在 mxfp8 上，一并未验） |
+
+| 跑通 | bf16 | mxfp8 |
+| --- | --- | --- |
+| A2 | ✅ 确定性两次 loss/grad_norm 相同（见下表）；`Training completed` | ❌ 未跑（配置期要官方 `dist_moe`；压缩 MoE 兼容一并未验） |
+| A5 | ✅ 2026-11-04，4 卡，`Training completed` | ❌ 预期配置期失败（与 A2 同因） |
 
 NPU 旁路已在分支上（`fc3aa0cf`）：干净检出本分支即可跑 bf16；不依赖 SM100 的 `dist_moe` CuTe 包。下面是实现要点（写文档时曾有一版只在工作区、未入库，那句话已过时）。
 
@@ -426,7 +451,11 @@ mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 | 配方 | `muse_spark_debugmodel_mm` |
 | 清单并行 | 8 卡：DP2 × TP2 × CP2 × EP2，CP 固定为 2。这次网格是 `pp=1, dp_replicate=1, dp_shard=2, cp=2, tp=2, ep=2`，上下文并行是 Ulysses |
 | 备注 | 数据为 CC12M 真实图像 + 合成视频 + 合成音频。编码器每步必执行，无媒体时走 dummy 输入。配方把 `train_timeout_seconds` 设为 1800，否则新的视觉长度编译会超过默认 100 秒 |
-| 结果 | 跑通。两次 loss、grad_norm 相同 |
+
+| 跑通 | 状态 | 证据 |
+| --- | --- | --- |
+| A2 | ✅ | 确定性两次：10 步 loss/grad_norm 逐项相同（见下表）；`Training completed` |
+| A5 | ⏸ | 8 卡未完成：同第 2 行③（vLLM / HCCL）；待补跑 |
 
 环境与前面几行相同：`HCCL_DETERMINISTIC=true`，`MUSE_DEBUG_DETERMINISTIC=1`，`NGPU=8`，模块 `torchtitan_recipes.tests.models.muse_spark`，配置 `muse_spark_debugmodel_mm`。启动前 8 张卡都空着。日志 `/workspace/det_mm_ep2_r1.log`（2026-10-30 08:47:43–08:52:04 UTC）和 `r2.log`（08:53:02–08:54:45 UTC）。两趟都有 `Training completed` 和 `Process group destroyed`。r1 有一条 `Sample length 649 > training max_context_length=512. Skip`。
 
@@ -476,7 +505,11 @@ mxfp8 配方没有改，也没有跑。`expert_precision="mxfp8"` 在配置期�
 | 配方 | `muse_spark_debugmodel_ultradata_lora_sft` |
 | 清单并行 | 8 卡：DP2 × TP2 × CP2 × EP8。这次网格是 `pp=1, dp_replicate=1, dp_shard=2, cp=2, tp=2, ep=8`，上下文并行是 Ulysses |
 | 备注 | debug 模型，词表宽度按 816B 写成 202048。`FullActivationRematConfig`，LoRA rank 8、alpha 16。数据是本地 JSONL，不是 Hugging Face 流 |
-| 结果 | 跑通。两次 loss、grad_norm 相同 |
+
+| 跑通 | 状态 | 证据 |
+| --- | --- | --- |
+| A2 | ✅ | 确定性两次：10 步 loss/grad_norm 逐项相同（见下表）；`Training completed` |
+| A5 | ⏸ | 8 卡未完成：同第 2 行③（vLLM / HCCL）；数据已就位，待补跑 |
 
 本机容器访问 huggingface.co:443 会被连接重置。debug 配方原来固定走 `HuggingFaceStreamingSource`。改成和 816B 配方一样，读 `MUSE_SPARK_ULTRADATA_JSONL_PATTERN`，默认 `./assets/datasets/muse_spark_ultradata/General_Agent_part-*.jsonl`。只放了 `openbmb/UltraData-SFT-Agent-2609` 的 General-Agent 第 1 份，`General_Agent_part-01-of-32.jsonl`，大小 1575113443 字节。dataloader 有 `repeat=True`，10 步用不完这一份，没有下另外 31 份。`assets/datasets/` 已加入 `.gitignore`。
 
