@@ -97,3 +97,16 @@ PY
 ```
 
 把这两行 loss、`git rev-parse HEAD`，以及两个输出目录留下。`.pt` 不要删。
+
+## 交数（2026-11-10）
+
+- HEAD：`912ced0c`（本文件所在提交，含 `scripts/dump_step1_grads.py`）
+- 是否独占：是（8 卡全空后顺序执行，一次一个 torchrun）
+- 两个 step-0 目录：存在（`outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0`、`outputs/checkpoint-debugmodel_mm/step-0`）
+- `sitecustomize`：venv 内文件被系统 `/usr/lib/python3.12/sitecustomize.py` 遮蔽（venv `--system-site-packages` 且系统同名文件优先）。已将垫片改放 `usercustomize.py`（sitecustomize 之后加载，不覆盖系统文件），功能验证通过（确定性模式下 grid_sample 反向两次梯度逐位相同）
+- step 1 对照（阈值 1e-4）：
+  - mm_fsdp2：loss `7.78986`（diff 1.18e-06）、grad_norm `9.1101`（diff 1.64e-05）→ **有效**
+  - debugmodel_mm：loss `7.79068`（diff 3.88e-06）、grad_norm `9.0938`（diff 1.66e-05）→ **有效**
+- 输出：`outputs/step1_grads/mm_fsdp2_tp2_cp2_ep4/`（rank0-7 .pt+.json 共 16 文件，45MB）、`outputs/step1_grads/debugmodel_mm/`（同构 16 文件，45MB）；日志 `logs/step1_grads_mm_fsdp2.log`、`logs/step1_grads_debugmodel_mm.log`（各含 8 行 `STEP1_GRAD_DUMP`）
+- `.pt` 保留在 GPU 机 `/home/y00839695/torchtitan/outputs/step1_grads/`，供与 950 逐元素相减；`.json` 已入 git
+- 过程备注：首次尝试失败于 ① runner 未进容器（宿主机 python3.10 缺 libcusparseLt）② 容器曾被外部停止 ③ torchrun 用系统 python 导致 worker 缺 venv 包（spmd_types）——分别以 docker exec 包装、容器重启、venv 内 torchrun 包装（shebang 指向 venv python）修复；期间机器发生过一次容器整体停止，已重启并验证
