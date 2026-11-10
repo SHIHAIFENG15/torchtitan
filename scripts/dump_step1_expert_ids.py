@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 import torch
+from torch.distributed.tensor import DTensor
 import torch.distributed as dist
 
 
@@ -51,10 +52,15 @@ def _install() -> None:
         name = getattr(self, "_expert_dump_name", None)
         if name and name not in _SEEN and os.environ.get("STEP1_EXPERT_DUMP_DIR"):
             _SEEN.add(name)
-            expert_ids = torch.sort(result[1].detach(), dim=-1).values.to(torch.int32).cpu()
-            entry = {"expert_ids": expert_ids}
-            if padding_mask_T is not None:
-                entry["padding_mask"] = padding_mask_T.detach().to(torch.bool).cpu()
+            t = result[1].detach()
+            if isinstance(t, DTensor):
+                t = t.to_local()
+            import spmd_types as spmd
+            with spmd.local():
+                expert_ids = torch.sort(t, dim=-1).values.to(torch.int32).cpu()
+                entry = {"expert_ids": expert_ids}
+                if padding_mask_T is not None:
+                    entry["padding_mask"] = padding_mask_T.detach().to(torch.bool).cpu()
             _SAVED[name] = entry
         return result
 

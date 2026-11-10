@@ -70,3 +70,12 @@ PY
 ```
 
 把 step 1 的 loss、grad_norm、`git rev-parse HEAD` 和 `outputs/step1_expert_ids/mm_fsdp2_tp2_cp2_ep4/` 留下。`.pt` 不要删。
+
+## 交数（2026-11-10）
+
+- HEAD：`63bd433c`（含 `scripts/dump_step1_expert_ids.py`）
+- step 1 对照（阈值 1e-4）：loss `7.78986`（diff 1.18e-06）、grad_norm `9.1101`（diff 1.64e-05）→ **有效**
+- 输出：`outputs/step1_expert_ids/mm_fsdp2_tp2_cp2_ep4/rank0-7.pt`（8 文件，rank0 抽查：8 层 router、每层 `(128, 2)` int32、K 维已排序、含 `padding_mask`、rank=0/world=8）
+- 日志 `STEP1_EXPERT_DUMP` 行数为 1（`LOG_RANK=0` 只回显 rank0；8 个 `.pt` 齐全）
+- **脚本修复（已入本提交）**：`dump_step1_expert_ids.py` 原样在 GPU 上触发 `SpmdTypeError: No valid sharding strategy for cpu`（expert_ids 为 spmd_types 包装的 DTensor，`.cpu()` 无合法分片策略）。修复：`to_local()` 取本地分片 + 整段导出包进 `spmd.local()`（spmd_types 官方逃生门，用于全局传播无法表达的块）。NPU 侧同样会踩到，建议拉取
+- `.pt` 保留在 GPU 机 `/home/y00839695/torchtitan/outputs/step1_expert_ids/`
