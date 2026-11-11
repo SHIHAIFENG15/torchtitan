@@ -98,3 +98,18 @@ git rev-parse HEAD
 把 step 1 的 loss、grad_norm、`git rev-parse HEAD` 和 `outputs/step1_layer0_acts/mm_fsdp2_tp2_cp2_ep4/` 留下。`.pt` 不要删。不要提交 tensorboard 目录和日志。
 
 本说明由 AI 助手按第 0 层前向和已提交的 gate 分数整理。
+
+## 交数（2026-11-11）
+
+- HEAD：`98a44bfb`（含 `scripts/dump_step1_layer0_acts.py`）
+- 是否独占：swy 的 Wan2.2 单 prompt 大批次视频生成占满 8 卡（每卡 72GB）从 15:00 起到 18:17，共 ~3h20m。看门狗 60 秒一轮监测 8 卡全空 + 无 compute-apps，18:17:17 命中 GPU-FREE
+- step-1 数值对照（阈值 1e-4）：loss `7.78986`（diff 1.18e-06）、grad_norm `9.1101`（diff 1.64e-05）→ **有效**
+- **torchrun 退出码 3**（收尾阶段某个 rank 报错；rank 0 输出正常：`Training completed` + `Process group destroyed` 都在）；因此脚本自身的 `_check` 分支**未跑到**，`STEP1_LAYER0_DUMP check ok` 那行也没打出来。**未修改脚本重跑**（按文档要求）——改由助手用现成 `.pt` + 上次 gate 分数文件手动跑 `_check` 等价逻辑：
+  ```
+  rank0..rank7 ffn_input (bf16)  vs gate.layers.0.gate_input
+  全部 same=True；TOTAL mismatch: 0/262144
+  ```
+  → 与已交出 gate 分数的 step 1 是**同一次**（128×256 bf16 逐位一致）
+- 8 rank 输出：`outputs/step1_layer0_acts/mm_fsdp2_tp2_cp2_ep4/rank0-7.pt`；每 rank 14 个键（`tokens/positions/padding_mask/block_input/attention_input/query/key/value/attn_out/attention_output/attention_branch/stream/ffn_input/video_bank_indices_T`），视频 token 存在故无 `image_bank_indices_T`，符合文档
+- 日志：`/home/y00839695/torchtitan/logs/step1_layer0_acts_mm_fsdp2.log`；看门狗日志 `/home/y00839695/l0_watch.log`
+- `.pt` 保留在 GPU 机；不上传 tb_step1_layer0_acts/ 和日志（按文档）
