@@ -96,3 +96,15 @@ git rev-parse HEAD
 把 step 1 的 loss、grad_norm、`git rev-parse HEAD` 和 `outputs/step1_gate_scores/mm_fsdp2_tp2_cp2_ep4/` 留下。`.pt` 不要删。不要提交 tensorboard 目录和日志。
 
 本说明由 AI 助手按 950 上已有的 gate 操作数 dump 和本分支已提交的专家编号整理。
+
+## 交数（2026-11-11）
+
+- HEAD：`6f6cb030`（含 `scripts/dump_step1_gate_scores.py`）
+- 是否独占：swy 的 Wan2.2 批量视频生成任务持续占用 8 卡（42GB/卡）超过 30 分钟；已部署看门狗等 8 卡全空（GPU_MAX=0 && 无 compute-apps）→ 12:27:00 GPU-FREE → 12:28:04 GATE-RUN-DONE，运行 ~60s 完整无外部干扰
+- step-1 数值对照（阈值 1e-4）：loss `7.78986`（diff 1.18e-06）、grad_norm `9.1101`（diff 1.64e-05）→ **有效**
+- **expert_ids mismatch 0/16384**（与 `outputs/step1_expert_ids/mm_fsdp2_tp2_cp2_ep4/` 逐元素一致，rank0-7 均对齐）
+- **STEP1_GATE_DUMP check ok**，退出码 `GATE-EXIT:0`，`Training completed`+`Process group destroyed` 齐全，无 `ChildFailedError`
+- 每 rank 每层 10 键齐全：`gate_input` bf16 (128, 256)、`gate_weight` bf16 (8, 256)、`gate_logits` fp32 (128, 8)、`scores` fp32、`expert_bias` fp32、`scores_for_choice` fp32、`topk_ids` int32 (128, 2)、`topk_scores` fp32、`expert_ids` int32 (128, 2) 已排序、`padding_mask` bool (128,)；共 8 rank × 8 层 = 64 组张量
+- 输出：`outputs/step1_gate_scores/mm_fsdp2_tp2_cp2_ep4/rank0.pt` 到 `rank7.pt`（8 个文件），`.pt` 保留在 GPU 机 `/home/y00839695/torchtitan/outputs/step1_gate_scores/mm_fsdp2_tp2_cp2_ep4/`
+- 日志：`/home/y00839695/torchtitan/logs/step1_gate_scores_mm_fsdp2.log`、看门狗日志 `/home/y00839695/gate_watch.log`
+- 过程无 DTensor/SpmdType 问题（gate 脚本内部已处理），一次跑通未改脚本
