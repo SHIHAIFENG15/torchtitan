@@ -69,7 +69,7 @@ echo EXIT:$?
 
 文本 attention 的 qkv、output gate、wo 是 bf16 乘、fp32 累加、fp32 输出。q、k、v 和 attention 输出保持 fp32。CUDA 上走 `mm(out_dtype=float32)`，非 CUDA 上把输入和权重升到 fp32 再做 mm。
 
-视觉和音频的 GEMM 也是 fp32 累加，但输出会再舍入一次回到输入的 dtype。NPU 的 LayerNorm 不接受 fp32 激活配 bf16 权重；`ca1d9b5c` 会在视觉 `ln_pre` 上报这个错。用这一次的 HEAD，不要用 `ca1d9b5c`。
+视觉和音频的 GEMM 也是 fp32 累加，但输出会再舍入一次回到输入的 dtype。NPU 的 LayerNorm 不接受 fp32 激活配 bf16 权重。请用 `8aba6931` 或更新的 HEAD：`ca1d9b5c` 死在视觉 LayerNorm，`c9e52084` 死在视觉投影的 remat。
 
 没有改的部分：router gate 本来就是 fp32 输出，保持不动。MoE 的 grouped expert GEMM 仍把权重收成 bf16，pooler 和 unpooler 仍是普通 Linear。进 attention 和进 MoE 之前的 `.to(bf16)` 还在。第 0 层之前若仍有 token 不一致，会留在 `block_input` 里。
 
