@@ -45,13 +45,12 @@ from torchtitan.models.common.decoder_sharding import (
     token_embedding_sharding_config,
 )
 from torchtitan.models.common.embedding import Embedding
-from torchtitan.models.common.linear import (
-    ColumnParallelLinear,
-    GroupedLinear,
-    Linear,
-    RowParallelLinear,
+from torchtitan.models.common.linear import GroupedLinear, Linear
+from torchtitan.models.common.linear.hi_mid_lo_linear import (
+    ColumnParallelHiMidLo,
+    HiMidLoLinear,
+    RowParallelHiMidLo,
 )
-from torchtitan.models.common.linear.hi_mid_lo_linear import HiMidLoLinear
 from torchtitan.models.common.moe import RoutedExperts, TokenChoiceTopKRouter
 from torchtitan.models.common.moe.sharding import (
     moe_sharding_config,
@@ -65,7 +64,7 @@ from torchtitan.models.common.nn_modules import Conv1d, GELU, LayerNorm, RMSNorm
 from torchtitan.models.common.param_init import depth_scaled_std
 from torchtitan.models.common.rope import ComplexRoPE
 from torchtitan.models.common.vision_encoder import (
-    InvariantRowParallelLinear,
+    InvariantRowParallelHiMidLo,
     VisionAttention,
     VisionMLP,
     VisionTransformerBlock,
@@ -163,13 +162,13 @@ def _audio_block_config(*, hidden_size: int, kernel_size: int) -> _AudioBlock.Co
             eps=_AUDIO_NORM_EPS,
             sharding_config=audio_invariant_state_sharding_config(),
         ),
-        linear1=Linear.Config(
+        linear1=HiMidLoLinear.Config(
             in_features=hidden_size,
             out_features=hidden_size * 4,
             bias=True,
             sharding_config=audio_invariant_state_sharding_config(has_bias=True),
         ),
-        linear2=Linear.Config(
+        linear2=HiMidLoLinear.Config(
             in_features=hidden_size * 4,
             out_features=hidden_size,
             bias=True,
@@ -204,7 +203,7 @@ def muse_spark_audio_encoder_config(
             _AudioStage.Config(
                 patchifier=_AudioPatchifier.Config(
                     patch_size=stage_patch_size,
-                    linear=Linear.Config(
+                    linear=HiMidLoLinear.Config(
                         in_features=stage_input * stage_patch_size,
                         out_features=hidden_size,
                         bias=True,
@@ -242,7 +241,7 @@ def muse_spark_audio_encoder_config(
             eps=_AUDIO_NORM_EPS,
             sharding_config=audio_invariant_state_sharding_config(),
         ),
-        o_proj=Linear.Config(
+        o_proj=HiMidLoLinear.Config(
             in_features=stage_input,
             out_features=output_size,
             bias=True,
@@ -389,7 +388,7 @@ def _attention_config(
             head_dim=head_dim,
             n_heads=num_heads,
             n_kv_heads=num_kv_heads,
-            wqkv=ColumnParallelLinear.Config(
+            wqkv=ColumnParallelHiMidLo.Config(
                 in_features=dim,
                 out_features=(num_heads + 2 * num_kv_heads) * head_dim,
                 bias=False,
@@ -402,7 +401,7 @@ def _attention_config(
                 sharding_config=colwise_sharding_config(input_layout=activation),
             ),
         ),
-        wo=RowParallelLinear.Config(
+        wo=RowParallelHiMidLo.Config(
             in_features=num_heads * head_dim,
             out_features=dim,
             bias=False,
@@ -437,7 +436,7 @@ def _attention_config(
             elementwise_affine=False,
             sharding_config=head_norm_sharding_config(),
         ),
-        output_gate=ColumnParallelLinear.Config(
+        output_gate=ColumnParallelHiMidLo.Config(
             in_features=dim,
             out_features=num_heads * head_dim,
             bias=False,
@@ -556,25 +555,25 @@ def _muse_spark_navit_attention_config(
         inner_attention=FlexInnerAttention.Config(
             sharding_config=vision_inner_attention_sharding_config(),
         ),
-        wq=Linear.Config(
+        wq=HiMidLoLinear.Config(
             in_features=latent_dim,
             out_features=latent_dim,
             bias=True,
             sharding_config=vision_colwise_sharding_config(input_tp=spmd.R),
         ),
-        wk=Linear.Config(
+        wk=HiMidLoLinear.Config(
             in_features=latent_dim,
             out_features=latent_dim,
             bias=True,
             sharding_config=vision_colwise_sharding_config(input_tp=spmd.R),
         ),
-        wv=Linear.Config(
+        wv=HiMidLoLinear.Config(
             in_features=latent_dim,
             out_features=latent_dim,
             bias=True,
             sharding_config=vision_colwise_sharding_config(input_tp=spmd.R),
         ),
-        proj=InvariantRowParallelLinear.Config(
+        proj=InvariantRowParallelHiMidLo.Config(
             in_features=latent_dim,
             out_features=latent_dim,
             bias=True,
@@ -590,13 +589,13 @@ def _muse_spark_navit_mlp_config(
     mlp_hidden_dim: int,
 ) -> VisionMLP.Config:
     return VisionMLP.Config(
-        fc1=Linear.Config(
+        fc1=HiMidLoLinear.Config(
             in_features=latent_dim,
             out_features=mlp_hidden_dim,
             bias=True,
             sharding_config=vision_colwise_sharding_config(),
         ),
-        fc2=InvariantRowParallelLinear.Config(
+        fc2=InvariantRowParallelHiMidLo.Config(
             in_features=mlp_hidden_dim,
             out_features=latent_dim,
             bias=True,
@@ -643,7 +642,7 @@ def muse_spark_navit_encoder_config(
             rope_theta=rope_theta,
             sharding_config=vision_rope_freq_sharding_config(),
         ),
-        conv1=Linear.Config(
+        conv1=HiMidLoLinear.Config(
             in_features=patch_input_dim,
             out_features=latent_dim,
             bias=False,
@@ -689,7 +688,7 @@ def muse_spark_navit_adapter_config(
     output_dim: int = 4096,
 ) -> MuseSparkNaViTAdapter.Config:
     return MuseSparkNaViTAdapter.Config(
-        c_fc=Linear.Config(
+        c_fc=HiMidLoLinear.Config(
             in_features=input_dim,
             out_features=output_dim,
             bias=False,
@@ -697,7 +696,7 @@ def muse_spark_navit_adapter_config(
                 vision_invariant_linear_sharding_config()
             ),
         ),
-        c_proj=Linear.Config(
+        c_proj=HiMidLoLinear.Config(
             in_features=output_dim,
             out_features=output_dim,
             bias=False,
@@ -773,7 +772,7 @@ def _muse_spark_config(
             "audio_encoder.output_size must match Muse Spark model dim "
             f"{dim}; got {audio_encoder.output_size}"
         )
-    vision_projection = Linear.Config(
+    vision_projection = HiMidLoLinear.Config(
         in_features=vision_adapter.c_proj.out_features,
         out_features=dim,
         bias=False,

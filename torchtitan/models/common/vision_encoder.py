@@ -33,6 +33,7 @@ from torchtitan.distributed.spmd_types import spmd_mesh_group
 from torchtitan.models.base.module import Module
 from torchtitan.models.common.attention import FlexInnerAttention, local_head_split
 from torchtitan.models.common.linear import Linear
+from torchtitan.models.common.linear.hi_mid_lo_linear import HiMidLoLinear
 from torchtitan.models.common.nn_modules import GELU, LayerNorm, RMSNorm
 
 compiled_create_block_mask = torch.compile(create_block_mask)
@@ -101,6 +102,14 @@ class InvariantRowParallelLinear(Linear):
             dst=spmd.I,
             backward_options={"op_dtype": output.dtype},
         )
+
+
+class InvariantRowParallelHiMidLo(InvariantRowParallelLinear, HiMidLoLinear):
+    """Invariant row-parallel vision projection with an fp32 GEMM output."""
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(HiMidLoLinear.Config):
+        pass
 
 
 def create_block_diagonal_mask(

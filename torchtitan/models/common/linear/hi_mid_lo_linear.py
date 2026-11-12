@@ -15,7 +15,11 @@ from torch.autograd.function import once_differentiable
 
 from torchtitan.distributed.batch_invariant import is_in_batch_invariant_mode
 from torchtitan.distributed.local_compile import local_compile
-from torchtitan.models.common.linear import Linear
+from torchtitan.models.common.linear.linear import (
+    ColumnParallelLinear,
+    Linear,
+    RowParallelLinear,
+)
 from torchtitan.models.common.linear.inplace_wgrad_accum import (
     running_grad,
     uses_inplace_wgrad_accum,
@@ -415,4 +419,24 @@ def _upcast_to_fp32_by_shift(tensor_bf16: torch.Tensor) -> torch.Tensor:
     return (tensor_bf16.view(torch.int16).to(torch.int32) << 16).view(torch.float32)
 
 
-__all__ = ["HiMidLoLinear"]
+class ColumnParallelHiMidLo(ColumnParallelLinear, HiMidLoLinear):
+    """Column-parallel projection whose GEMM accumulates in fp32 and returns fp32.
+
+    Attention reads this output directly. Rounding it back to bf16 recreates a
+    one-bin gap between devices before the score.
+    """
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(HiMidLoLinear.Config):
+        pass
+
+
+class RowParallelHiMidLo(RowParallelLinear, HiMidLoLinear):
+    """Row-parallel projection whose GEMM accumulates in fp32 and returns fp32."""
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(HiMidLoLinear.Config):
+        pass
+
+
+__all__ = ["ColumnParallelHiMidLo", "HiMidLoLinear", "RowParallelHiMidLo"]
