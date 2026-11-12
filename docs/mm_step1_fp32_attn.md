@@ -1,6 +1,6 @@
 # 多模态第 1 步：fp32 attention 对照（GPU）
 
-只跑 AllGatherKV 这一条，只跑第 1 步。这次测的是代码改动本身：qkv、output gate、wo，以及写进第 0 层之前的视觉和音频 GEMM，都改成 fp32 累加、fp32 输出。q、k、v 以 fp32 进入 flex attention，不再在算分数前收成 bf16。
+只跑 AllGatherKV 这一条，只跑第 1 步。这次测的是代码改动本身：qkv、output gate、wo 改为 fp32 累加并保持 fp32 输出，q、k、v 以 fp32 进入 flex attention。视觉和音频 GEMM 也是 fp32 累加，输出再舍入回原来的 dtype。
 
 旧的 step 1（loss `7.789858818054199`，grad_norm `9.11008358001709`，以及 `outputs/step1_expert_ids/`、`outputs/step1_gate_scores/`、`outputs/step1_layer0_acts/`）是改动前的 bf16 qkv 模型。那些数会变。不要拿它们当通过条件，也不要为了对齐旧数再跑一次。
 
@@ -67,9 +67,11 @@ echo EXIT:$?
 
 ## 这次改了什么，这次不覆盖什么
 
-改了的投影：文本 attention 的 qkv、output gate、wo；视觉 encoder 的 conv、q/k/v、proj、MLP、adapter，以及接到词嵌入上的 vision projection；音频 encoder 里的 linear。它们都是 bf16 乘、fp32 累加、fp32 输出。CUDA 上走 `mm(out_dtype=float32)`，非 CUDA 上把输入和权重升到 fp32 再做 mm。
+文本 attention 的 qkv、output gate、wo 是 bf16 乘、fp32 累加、fp32 输出。q、k、v 和 attention 输出保持 fp32。CUDA 上走 `mm(out_dtype=float32)`，非 CUDA 上把输入和权重升到 fp32 再做 mm。
 
-没有改的部分：MoE 的 grouped expert GEMM 仍把权重收成 bf16，pooler 和 unpooler 仍是普通 Linear。进 attention 和进 MoE 之前的 `.to(bf16)` 还在，那是这些 bf16 权重的输入。第 0 层之前若仍有 token 不一致，会留在 `block_input` 里，用这一次的文件就能看，不需要再跑一趟。
+视觉和音频的 GEMM 也是 fp32 累加，但输出会再舍入一次回到输入的 dtype。NPU 的 LayerNorm 不接受 fp32 激活配 bf16 权重；`ca1d9b5c` 会在视觉 `ln_pre` 上报这个错。用这一次的 HEAD，不要用 `ca1d9b5c`。
+
+没有改的部分：router gate 本来就是 fp32 输出，保持不动。MoE 的 grouped expert GEMM 仍把权重收成 bf16，pooler 和 unpooler 仍是普通 Linear。进 attention 和进 MoE 之前的 `.to(bf16)` 还在。第 0 层之前若仍有 token 不一致，会留在 `block_input` 里。
 
 ## 怎样算交数完成
 

@@ -419,6 +419,29 @@ def _upcast_to_fp32_by_shift(tensor_bf16: torch.Tensor) -> torch.Tensor:
     return (tensor_bf16.view(torch.int16).to(torch.int32) << 16).view(torch.float32)
 
 
+class HiMidLoToInput(HiMidLoLinear):
+    """fp32 GEMM, then one rounding back to the input dtype.
+
+    NPU LayerNorm rejects an fp32 activation against a bf16 weight. The
+    rounding is of the fp32 accumulation, not of a bf16 GEMM.
+    """
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(HiMidLoLinear.Config):
+        pass
+
+    def _linear(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor | None,
+    ) -> torch.Tensor:
+        output = super()._linear(input, weight, bias)
+        if output.dtype != input.dtype:
+            output = output.to(input.dtype)
+        return output
+
+
 class ColumnParallelHiMidLo(ColumnParallelLinear, HiMidLoLinear):
     """Column-parallel projection whose GEMM accumulates in fp32 and returns fp32.
 
@@ -439,4 +462,9 @@ class RowParallelHiMidLo(RowParallelLinear, HiMidLoLinear):
         pass
 
 
-__all__ = ["ColumnParallelHiMidLo", "HiMidLoLinear", "RowParallelHiMidLo"]
+__all__ = [
+    "ColumnParallelHiMidLo",
+    "HiMidLoLinear",
+    "HiMidLoToInput",
+    "RowParallelHiMidLo",
+]

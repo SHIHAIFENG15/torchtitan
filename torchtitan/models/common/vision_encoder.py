@@ -105,11 +105,17 @@ class InvariantRowParallelLinear(Linear):
 
 
 class InvariantRowParallelHiMidLo(InvariantRowParallelLinear, HiMidLoLinear):
-    """Invariant row-parallel vision projection with an fp32 GEMM output."""
+    """fp32 row-parallel GEMM, reduced in fp32, then rounded to the input dtype."""
 
     @dataclass(kw_only=True, slots=True)
     class Config(HiMidLoLinear.Config):
         pass
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        output = super().forward(input)
+        if output.dtype != input.dtype:
+            output = output.to(input.dtype)
+        return output
 
 
 def create_block_diagonal_mask(
