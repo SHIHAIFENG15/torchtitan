@@ -113,9 +113,11 @@ class InvariantRowParallelHiMidLo(InvariantRowParallelLinear, HiMidLoLinear):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         output = super().forward(input)
-        if output.dtype != input.dtype:
-            output = output.to(input.dtype)
-        return output
+        if output.dtype == input.dtype:
+            return output
+        # The reduce is a saved remat region. A bare cast would read its placeholder.
+        remat.recompute_needs_tensor(output)
+        return output.to(input.dtype)
 
 
 def create_block_diagonal_mask(
