@@ -78,3 +78,15 @@ echo EXIT:$?
 8 个 `.pt` 都在。日志有 `Training completed` 和 `STEP1_FP32_ATTN check ok`。把 step 1 的 loss、grad_norm、`git rev-parse HEAD`、dtype 那几行，以及 `outputs/step1_fp32_attn/mm_fsdp2_tp2_cp2_ep4/` 留下。`.pt` 提交到本分支。不要提交 tensorboard 目录和日志。不要和旧 expert id 做通过与否的判断。
 
 本说明由 AI 助手根据已定位的 qkv 舍入差整理。
+
+## 交数（2026-11-13）
+
+- HEAD：`9934c577`
+- 是否独占：另一批 8-rank torchtitan_job（`/workspace/torchtitan_job`）从 14:33 起独占 59441 MB/卡跑了整夜，看门狗判据过严（要求 compute-apps=0，实际有 644 MB 长驻 atk 服务）未触发；至 09:19-09:20 该 job 结束、GPU 释放（仅剩 atk 525 MB）后手动跑一次成功
+- step 1：**loss 7.79107、grad_norm 9.0969**（对比旧 bf16 基线 `7.78986 / 9.1101`，loss 变 0.00121、grad 变 0.0132 —— 这就是新的 GPU 基线，符合文档"和旧的 7.78986 不同是预期的"）
+- 5 个 attention 张量 dtype 检查：`query/key/value/attn_out/attention_output` **全部 float32** ✓（rank 0-7 全一致；形状 query=(256,4,32)）
+- 日志：`Training completed` ✓，`STEP1_FP32_ATTN check ok` ✓，无 `ChildFailedError`
+- 退出码：`FP32-EXIT:0` ✓（本次没有 torchrun 收尾 exit 3 那种意外）
+- 输出：`outputs/step1_fp32_attn/mm_fsdp2_tp2_cp2_ep4/rank0.pt` 到 `rank7.pt`（8 个文件）；layer0 键 + routers (8 层 feed_forward.router 含 expert_ids / topk_scores / padding_mask)
+- 日志路径：`/home/y00839695/torchtitan/logs/step1_fp32_attn_mm_fsdp2.log`
+- 备注：`fp32_watch.sh` 里判据过严那一点（compute-apps 必须为 0，但 box 上长期有 644 MB 的 `atk server --devices 0`）已知；后续看门狗判据改用"每卡 <2GB 就认为窗口"更合理
