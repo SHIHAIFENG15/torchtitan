@@ -47,34 +47,10 @@ def _k_dim_is_sharded(tensor: torch.Tensor) -> bool:
     return False
 
 
-def _vendor_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tensor:
-    if (
-        input_MK.is_cuda
-        and input_MK.dtype == weight_NK.dtype == torch.bfloat16
-        and not is_in_batch_invariant_mode()
-    ):
-        return torch.mm(input_MK, weight_NK.T, out_dtype=torch.float32)
-    return torch.mm(input_MK.float(), weight_NK.float().T)
-
-
-@torch.compiler.disable
-def _pairwise_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tensor:
-    """``input @ weight.T`` with one fp32 product tree on CPU, CUDA, and NPU.
-
-    Each product is its own mul. Pairs of partial sums are their own add, so a
-    vendor GEMM cannot pick a different accumulation order. K is padded with
-    zeros to a power of two; those zeros do not change the sum.
-
-    Row-parallel K is already sharded. Selecting one side of a pair there is an
-    implicit reshard, so that case keeps the vendor matmul and lets the
-    existing all-reduce sum the partials. Column-parallel Q, K, V, and the
-    router keep the full K on each rank, which is the reduction that was
-    diverging.
-    """
-    if _k_dim_is_sharded(input_MK) or _k_dim_is_sharded(weight_NK):
-        return _vendor_mm(input_MK, weight_NK)
-    x = input_MK.float()
-    w = weight_NK.float()
+def _pairwise_tree(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+    """Pairwise ``x @ w.T`` on plain tensors. ``x`` is [M, K], ``w`` is [N, K]."""
+    x = x.float()
+    w = w.float()
     k = x.shape[-1]
     if k & (k - 1):
         padded = 1 << (k - 1).bit_length()
@@ -87,6 +63,50 @@ def _pairwise_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tenso
         partial = partial.reshape(*partial.shape[:-1], partial.shape[-1] // 2, 2)
         partial = torch.add(partial[..., 0], partial[..., 1])
     return partial.reshape(partial.shape[0], partial.shape[1])
+
+
+def _pairwise_on_sharded_k(
+    input_MK: torch.Tensor, weight_NK: torch.Tensor
+) -> torch.Tensor:
+    """Pairwise-reduce the local K shard and keep ``mm``'s output placement.
+
+    Row-parallel K is sharded, so selecting one side of a pair on that axis is
+    an implicit reshard. Each rank already holds the same K rows ``mm`` would
+    multiply. The tree runs on those local rows, and the result is wrapped
+    with the placement ``mm`` would have returned (a partial sum on TP). The
+    existing row-parallel all-reduce adds those partials.
+    """
+    from torch.distributed.tensor import DTensor
+
+    # Placements only. The values are replaced by the pairwise tree.
+    with torch.no_grad():
+        placed = torch.mm(input_MK.float(), weight_NK.float().T)
+        local = _pairwise_tree(input_MK.to_local(), weight_NK.to_local())
+    placed_local = placed.to_local()
+    if local.shape != placed_local.shape:
+        raise RuntimeError(
+            f"pairwise local shape {tuple(local.shape)} != "
+            f"mm local shape {tuple(placed_local.shape)}"
+        )
+    if not isinstance(placed, DTensor):
+        return local
+    return DTensor.from_local(
+        local, placed.device_mesh, placed.placements, run_check=False
+    )
+
+
+@torch.compiler.disable
+def _pairwise_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tensor:
+    """``input @ weight.T`` with one fp32 product tree on CPU, CUDA, and NPU.
+
+    Each product is its own mul. Pairs of partial sums are their own add, so a
+    vendor GEMM cannot pick a different accumulation order. K is padded with
+    zeros to a power of two; those zeros do not change the sum. A sharded K
+    runs that tree on the local shard; see ``_pairwise_on_sharded_k``.
+    """
+    if _k_dim_is_sharded(input_MK) or _k_dim_is_sharded(weight_NK):
+        return _pairwise_on_sharded_k(input_MK, weight_NK)
+    return _pairwise_tree(input_MK, weight_NK)
 
 
 def _pairwise_backward(
