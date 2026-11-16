@@ -6,6 +6,7 @@
 
 """``HiMidLoLinear``: a ``Linear`` with an fp32 output and close to fp32 gradients."""
 
+import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -27,6 +28,53 @@ from torchtitan.models.common.linear.inplace_wgrad_accum import (
 
 # Shape suffix legend for HiMidLoLinear:
 #   T = num tokens, D = model dimension, O = output features, P = grad_output pieces (2 or 3)
+
+
+def _pairwise_gemm_enabled() -> bool:
+    # Muse sets this. CUDA out_dtype and the NPU fp32 mm reduce K in different orders.
+    return os.environ.get("MUSE_PAIRWISE_GEMM") == "1"
+
+
+@torch.compiler.disable
+def _pairwise_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tensor:
+    """``input @ weight.T`` with one fp32 product tree on CPU, CUDA, and NPU.
+
+    Each product is its own mul. Pairs of partial sums are their own add, so a
+    vendor GEMM cannot pick a different accumulation order. K is padded with
+    zeros to a power of two; those zeros do not change the sum.
+    """
+    x = input_MK.float()
+    w = weight_NK.float()
+    k = x.shape[-1]
+    if k & (k - 1):
+        padded = 1 << (k - 1).bit_length()
+        x = torch.nn.functional.pad(x, (0, padded - k))
+        w = torch.nn.functional.pad(w, (0, padded - k))
+    outputs = []
+    for start in range(0, w.shape[0], 64):
+        wc = w[start : start + 64]
+        partial = torch.mul(x[:, None, :], wc[None, :, :])
+        while partial.shape[-1] > 1:
+            partial = partial.reshape(*partial.shape[:-1], partial.shape[-1] // 2, 2)
+            partial = torch.add(partial[..., 0], partial[..., 1])
+        outputs.append(partial.reshape(partial.shape[0], partial.shape[1]))
+    return torch.cat(outputs, dim=1) if len(outputs) > 1 else outputs[0]
+
+
+def _pairwise_backward(
+    grad_output_TO: torch.Tensor,
+    input_TD: torch.Tensor,
+    weight_OD: torch.Tensor,
+    *,
+    needs_grad_input: bool,
+    needs_grad_weight: bool,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    grad_input_TD = grad_weight_OD = None
+    if needs_grad_input:
+        grad_input_TD = _pairwise_mm(grad_output_TO, weight_OD.T).to(input_TD.dtype)
+    if needs_grad_weight:
+        grad_weight_OD = _pairwise_mm(grad_output_TO.T, input_TD.T)
+    return grad_input_TD, grad_weight_OD
 
 
 class HiMidLoLinear(Linear):
@@ -117,6 +165,9 @@ class _HiMidLoLinearFunction(torch.autograd.Function):
         # clear its .grad, and saved-tensor hooks may unpack a different one. A leaf parameter
         # does not reference its graph, so this forms no cycle.
         ctx.weight_param = weight if inplace_wgrad_accum else None
+        ctx.pairwise = _pairwise_gemm_enabled()
+        if ctx.pairwise:
+            return _pairwise_mm(input_TD, weight_OD)
         if ctx.use_bf16_gemm:
             return torch.mm(input_TD, weight_OD.T, out_dtype=torch.float32)
         # Slow fallback: upcast the input and weight to fp32.
@@ -211,7 +262,15 @@ class _HiMidLoLinearFunction(torch.autograd.Function):
         grad_output_TO = grad_output_TO.float()
         num_tokens, out_features = grad_output_TO.shape
 
-        if not ctx.use_bf16_gemm:  # cases (a)-(c) in HiMidLoLinear
+        if ctx.pairwise:
+            grad_input_TD, grad_weight_OD = _pairwise_backward(
+                grad_output_TO,
+                input_TD,
+                weight_OD,
+                needs_grad_input=needs_grad_input,
+                needs_grad_weight=needs_grad_weight,
+            )
+        elif not ctx.use_bf16_gemm:  # cases (a)-(c) in HiMidLoLinear
             grad_input_TD, grad_weight_OD = _fp32_backward(
                 grad_output_TO,
                 input_TD,

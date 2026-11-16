@@ -6,7 +6,12 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
+
+# CUDA out_dtype and the NPU fp32 mm reduce K differently. One pairwise tree
+# keeps Muse Q, K, V, and the router on the same fp32 values.
+os.environ.setdefault("MUSE_PAIRWISE_GEMM", "1")
 from dataclasses import dataclass, field
 from typing import Any, cast, Literal
 
