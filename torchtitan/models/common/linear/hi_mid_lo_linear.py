@@ -35,6 +35,28 @@ def _pairwise_gemm_enabled() -> bool:
     return os.environ.get("MUSE_PAIRWISE_GEMM") == "1"
 
 
+def _k_dim_is_sharded(tensor: torch.Tensor) -> bool:
+    from torch.distributed.tensor import DTensor, Shard
+
+    if not isinstance(tensor, DTensor):
+        return False
+    last = tensor.ndim - 1
+    for placement in tensor.placements:
+        if isinstance(placement, Shard) and placement.dim % tensor.ndim == last:
+            return True
+    return False
+
+
+def _vendor_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tensor:
+    if (
+        input_MK.is_cuda
+        and input_MK.dtype == weight_NK.dtype == torch.bfloat16
+        and not is_in_batch_invariant_mode()
+    ):
+        return torch.mm(input_MK, weight_NK.T, out_dtype=torch.float32)
+    return torch.mm(input_MK.float(), weight_NK.float().T)
+
+
 @torch.compiler.disable
 def _pairwise_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tensor:
     """``input @ weight.T`` with one fp32 product tree on CPU, CUDA, and NPU.
@@ -42,7 +64,15 @@ def _pairwise_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tenso
     Each product is its own mul. Pairs of partial sums are their own add, so a
     vendor GEMM cannot pick a different accumulation order. K is padded with
     zeros to a power of two; those zeros do not change the sum.
+
+    Row-parallel K is already sharded. Selecting one side of a pair there is an
+    implicit reshard, so that case keeps the vendor matmul and lets the
+    existing all-reduce sum the partials. Column-parallel Q, K, V, and the
+    router keep the full K on each rank, which is the reduction that was
+    diverging.
     """
+    if _k_dim_is_sharded(input_MK) or _k_dim_is_sharded(weight_NK):
+        return _vendor_mm(input_MK, weight_NK)
     x = input_MK.float()
     w = weight_NK.float()
     k = x.shape[-1]
