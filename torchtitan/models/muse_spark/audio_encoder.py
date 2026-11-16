@@ -35,7 +35,12 @@ def _pairwise_mean(values: torch.Tensor) -> torch.Tensor:
 
 
 class AudioRMSNorm(RMSNorm):
-    """fp32 RMSNorm, then one rounding back to the input dtype."""
+    """fp32 RMSNorm. The caller rounds back to bf16 after the next linear.
+
+    Rounding here casts a 1-ulp rsqrt gap onto opposite bf16 bins. The
+    following GEMM then spreads that bin. Keeping fp32 through the linear
+    leaves the gap below a bf16 ulp.
+    """
 
     @dataclass(kw_only=True, slots=True)
     class Config(RMSNorm.Config):
@@ -46,7 +51,7 @@ class AudioRMSNorm(RMSNorm):
         normalized = values * torch.rsqrt(_pairwise_mean(values * values) + self.eps)
         if self.weight is not None:
             normalized = normalized * self.weight.float()
-        return normalized.to(input.dtype)
+        return normalized
 
 
 # Shape suffix legend:
@@ -95,6 +100,10 @@ class _DepthwiseCausalConv(Module):
         self,
         value_LD: torch.Tensor,
     ) -> torch.Tensor:
+        # The preceding norm stays in fp32. Conv still runs in its weight dtype.
+        weight_dtype = self.conv.weight.dtype
+        if value_LD.dtype != weight_dtype:
+            value_LD = value_LD.to(weight_dtype)
         conv_input_DL = F.pad(
             value_LD.transpose(0, 1),
             (self.kernel_size - 1, 0),
@@ -119,12 +128,15 @@ class _AudioBlock(Module):
 
     def forward(self, value_LD: torch.Tensor) -> torch.Tensor:
         residual_LD = value_LD
-        value_LD = self.conv(value_LD)
-        hidden_LF = self.linear1(self.norm(value_LD))
+        conv_LD = self.conv(value_LD)
+        hidden_LF = self.linear1(self.norm(conv_LD))
         remat.recompute_needs_tensor(hidden_LF)
-        value_LD = self.linear2(F.gelu(hidden_LF))
-        remat.recompute_needs_tensor(value_LD)
-        return value_LD + residual_LD
+        mixed_LD = self.linear2(F.gelu(hidden_LF))
+        remat.recompute_needs_tensor(mixed_LD)
+        mixed_LD = mixed_LD + residual_LD
+        if mixed_LD.dtype != conv_LD.dtype:
+            mixed_LD = mixed_LD.to(conv_LD.dtype)
+        return mixed_LD
 
 
 class _AudioStage(Module):
@@ -169,9 +181,13 @@ class MuseSparkAudioEncoder(Module):
         self.dual_norm = config.dual_norm.build()
 
     def _encode(self, value_LC: torch.Tensor) -> torch.Tensor:
+        activation_dtype = value_LC.dtype
         for layer in self.layers.values():
             value_LC = layer(value_LC)
-        return self.dual_norm(self.o_proj(self.norm(value_LC)))
+        encoded_LD = self.dual_norm(self.o_proj(self.norm(value_LC)))
+        if encoded_LD.dtype != activation_dtype:
+            encoded_LD = encoded_LD.to(activation_dtype)
+        return encoded_LD
 
     def forward(
         self,
