@@ -21,9 +21,8 @@ from torchtitan.models.common.nn_modules import Conv1d, RMSNorm
 def _pairwise_mean(values: torch.Tensor) -> torch.Tensor:
     """Mean over the last dimension with a fixed pairwise add tree.
 
-    Audio hidden sizes are powers of two. CUDA and NPU fused rms_norm
-    kernels use different trees, so a value within 1e-7 of a bf16 midpoint
-    can round to opposite bins.
+    Audio hidden sizes are powers of two. A fixed tree keeps the sum of
+    squares identical on CUDA and NPU.
     """
     width = values.shape[-1]
     if width & (width - 1):
@@ -34,13 +33,29 @@ def _pairwise_mean(values: torch.Tensor) -> torch.Tensor:
     return reduced / width
 
 
-class AudioRMSNorm(RMSNorm):
-    """fp32 RMSNorm. The caller rounds back to bf16 after the next linear.
+@torch.compiler.disable
+def _rsqrt_fp32(values: torch.Tensor) -> torch.Tensor:
+    """fp32 rsqrt with one rounding sequence on CPU, CUDA, and NPU.
 
-    Rounding here casts a 1-ulp rsqrt gap onto opposite bf16 bins. The
-    following GEMM then spreads that bin. Keeping fp32 through the linear
-    leaves the gap below a bf16 ulp.
+    libm rsqrt differs by one ulp. That ulp is enough to cross a bf16
+    midpoint, and the following linear spreads the bin. The guess is an
+    integer shift. Each Newton step is a separate mul and sub so it is not
+    contracted into an fma.
     """
+    bits = values.view(torch.int32)
+    magic = torch.tensor(0x5F3759DF, dtype=torch.int32, device=values.device)
+    guess = torch.sub(magic, bits >> 1).view(torch.float32)
+    half = torch.mul(values, 0.5)
+    three_half = torch.tensor(1.5, dtype=torch.float32, device=values.device)
+    y = guess
+    for _ in range(4):
+        y2 = torch.mul(y, y)
+        y = torch.mul(y, torch.sub(three_half, torch.mul(half, y2)))
+    return y
+
+
+class AudioRMSNorm(RMSNorm):
+    """fp32 RMSNorm with a shared rsqrt, then one cast back to the activation."""
 
     @dataclass(kw_only=True, slots=True)
     class Config(RMSNorm.Config):
@@ -48,10 +63,10 @@ class AudioRMSNorm(RMSNorm):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         values = input.float()
-        normalized = values * torch.rsqrt(_pairwise_mean(values * values) + self.eps)
+        normalized = values * _rsqrt_fp32(_pairwise_mean(values * values) + self.eps)
         if self.weight is not None:
             normalized = normalized * self.weight.float()
-        return normalized
+        return normalized.to(input.dtype)
 
 
 # Shape suffix legend:
@@ -100,10 +115,6 @@ class _DepthwiseCausalConv(Module):
         self,
         value_LD: torch.Tensor,
     ) -> torch.Tensor:
-        # The preceding norm stays in fp32. Conv still runs in its weight dtype.
-        weight_dtype = self.conv.weight.dtype
-        if value_LD.dtype != weight_dtype:
-            value_LD = value_LD.to(weight_dtype)
         conv_input_DL = F.pad(
             value_LD.transpose(0, 1),
             (self.kernel_size - 1, 0),
@@ -128,15 +139,12 @@ class _AudioBlock(Module):
 
     def forward(self, value_LD: torch.Tensor) -> torch.Tensor:
         residual_LD = value_LD
-        conv_LD = self.conv(value_LD)
-        hidden_LF = self.linear1(self.norm(conv_LD))
+        value_LD = self.conv(value_LD)
+        hidden_LF = self.linear1(self.norm(value_LD))
         remat.recompute_needs_tensor(hidden_LF)
-        mixed_LD = self.linear2(F.gelu(hidden_LF))
-        remat.recompute_needs_tensor(mixed_LD)
-        mixed_LD = mixed_LD + residual_LD
-        if mixed_LD.dtype != conv_LD.dtype:
-            mixed_LD = mixed_LD.to(conv_LD.dtype)
-        return mixed_LD
+        value_LD = self.linear2(F.gelu(hidden_LF))
+        remat.recompute_needs_tensor(value_LD)
+        return value_LD + residual_LD
 
 
 class _AudioStage(Module):
@@ -181,13 +189,9 @@ class MuseSparkAudioEncoder(Module):
         self.dual_norm = config.dual_norm.build()
 
     def _encode(self, value_LC: torch.Tensor) -> torch.Tensor:
-        activation_dtype = value_LC.dtype
         for layer in self.layers.values():
             value_LC = layer(value_LC)
-        encoded_LD = self.dual_norm(self.o_proj(self.norm(value_LC)))
-        if encoded_LD.dtype != activation_dtype:
-            encoded_LD = encoded_LD.to(activation_dtype)
-        return encoded_LD
+        return self.dual_norm(self.o_proj(self.norm(value_LC)))
 
     def forward(
         self,
