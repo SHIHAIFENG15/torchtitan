@@ -50,15 +50,13 @@ def _pairwise_mm(input_MK: torch.Tensor, weight_NK: torch.Tensor) -> torch.Tenso
         padded = 1 << (k - 1).bit_length()
         x = torch.nn.functional.pad(x, (0, padded - k))
         w = torch.nn.functional.pad(w, (0, padded - k))
-    outputs = []
-    for start in range(0, w.shape[0], 64):
-        wc = w[start : start + 64]
-        partial = torch.mul(x[:, None, :], wc[None, :, :])
-        while partial.shape[-1] > 1:
-            partial = partial.reshape(*partial.shape[:-1], partial.shape[-1] // 2, 2)
-            partial = torch.add(partial[..., 0], partial[..., 1])
-        outputs.append(partial.reshape(partial.shape[0], partial.shape[1]))
-    return torch.cat(outputs, dim=1) if len(outputs) > 1 else outputs[0]
+    # Do not slice the output dimension. Column-parallel weights are sharded
+    # there, and a slice is an implicit reshard.
+    partial = torch.mul(x[:, None, :], w[None, :, :])
+    while partial.shape[-1] > 1:
+        partial = partial.reshape(*partial.shape[:-1], partial.shape[-1] // 2, 2)
+        partial = torch.add(partial[..., 0], partial[..., 1])
+    return partial.reshape(partial.shape[0], partial.shape[1])
 
 
 def _pairwise_backward(
