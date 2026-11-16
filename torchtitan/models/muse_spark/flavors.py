@@ -84,6 +84,7 @@ from .audio_encoder import (
     _AudioPatchifier,
     _AudioStage,
     _DepthwiseCausalConv,
+    AudioRMSNorm,
     MuseSparkAudioEncoder,
 )
 from .model import (
@@ -158,7 +159,7 @@ def _audio_block_config(*, hidden_size: int, kernel_size: int) -> _AudioBlock.Co
             ),
             sharding_config=audio_wrapper_sharding_config("value_LD"),
         ),
-        norm=RMSNorm.Config(
+        norm=AudioRMSNorm.Config(
             normalized_shape=hidden_size,
             eps=_AUDIO_NORM_EPS,
             sharding_config=audio_invariant_state_sharding_config(),
@@ -212,7 +213,7 @@ def muse_spark_audio_encoder_config(
                             has_bias=True
                         ),
                     ),
-                    norm=RMSNorm.Config(
+                    norm=AudioRMSNorm.Config(
                         normalized_shape=hidden_size,
                         eps=_AUDIO_NORM_EPS,
                         sharding_config=audio_invariant_state_sharding_config(),
@@ -237,7 +238,7 @@ def muse_spark_audio_encoder_config(
         patch_size=patch_size,
         input_channels=input_channels,
         layers=layers,
-        norm=RMSNorm.Config(
+        norm=AudioRMSNorm.Config(
             normalized_shape=stage_input,
             eps=_AUDIO_NORM_EPS,
             sharding_config=audio_invariant_state_sharding_config(),
@@ -248,7 +249,7 @@ def muse_spark_audio_encoder_config(
             bias=True,
             sharding_config=audio_invariant_state_sharding_config(has_bias=True),
         ),
-        dual_norm=RMSNorm.Config(
+        dual_norm=AudioRMSNorm.Config(
             normalized_shape=output_size,
             eps=_AUDIO_NORM_EPS,
             sharding_config=audio_invariant_state_sharding_config(),

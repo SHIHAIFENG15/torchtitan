@@ -18,6 +18,37 @@ from torchtitan.models.common import Linear
 from torchtitan.models.common.nn_modules import Conv1d, RMSNorm
 
 
+def _pairwise_mean(values: torch.Tensor) -> torch.Tensor:
+    """Mean over the last dimension with a fixed pairwise add tree.
+
+    Audio hidden sizes are powers of two. CUDA and NPU fused rms_norm
+    kernels use different trees, so a value within 1e-7 of a bf16 midpoint
+    can round to opposite bins.
+    """
+    width = values.shape[-1]
+    if width & (width - 1):
+        raise ValueError(f"audio RMSNorm width must be a power of two, got {width}")
+    reduced = values
+    while reduced.shape[-1] > 1:
+        reduced = reduced.reshape(*reduced.shape[:-1], reduced.shape[-1] // 2, 2).sum(-1)
+    return reduced / width
+
+
+class AudioRMSNorm(RMSNorm):
+    """fp32 RMSNorm, then one rounding back to the input dtype."""
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(RMSNorm.Config):
+        pass
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        values = input.float()
+        normalized = values * torch.rsqrt(_pairwise_mean(values * values) + self.eps)
+        if self.weight is not None:
+            normalized = normalized * self.weight.float()
+        return normalized.to(input.dtype)
+
+
 # Shape suffix legend:
 # N = waveforms, S = packed waveform samples, L = sequence length,
 # C = audio or stage input channels, P = patches,
@@ -30,7 +61,7 @@ class _AudioPatchifier(Module):
     class Config(Module.Config):
         patch_size: int
         linear: Linear.Config
-        norm: RMSNorm.Config
+        norm: AudioRMSNorm.Config
 
     def __init__(self, config: Config) -> None:
         super().__init__()
@@ -75,7 +106,7 @@ class _AudioBlock(Module):
     @dataclass(kw_only=True, slots=True)
     class Config(Module.Config):
         conv: _DepthwiseCausalConv.Config
-        norm: RMSNorm.Config
+        norm: AudioRMSNorm.Config
         linear1: Linear.Config
         linear2: Linear.Config
 
@@ -124,9 +155,9 @@ class MuseSparkAudioEncoder(Module):
         patch_size: int
         input_channels: int
         layers: list[_AudioStage.Config]
-        norm: RMSNorm.Config
+        norm: AudioRMSNorm.Config
         o_proj: Linear.Config
-        dual_norm: RMSNorm.Config
+        dual_norm: AudioRMSNorm.Config
 
     def __init__(self, config: Config) -> None:
         super().__init__()
