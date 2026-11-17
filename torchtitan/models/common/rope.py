@@ -259,9 +259,13 @@ class ComplexRoPE(RoPE):
         # Device polar is libm-dependent: CUDA sin/cos differs from NPU/CPU by up
         # to ~1.5e-5 at large angles, which was the last q/k divergence. The outer
         # product above is exact on every device; only polar needs a shared host.
-        freqs_cis = torch.polar(torch.ones_like(freqs.cpu()), freqs.cpu()).to(
-            freqs.device
-        )  # complex64
+        # Meta init has no data to move; the real recompute takes the host branch.
+        if freqs.is_meta:
+            freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+        else:
+            freqs_cis = torch.polar(torch.ones_like(freqs.cpu()), freqs.cpu()).to(
+                freqs.device
+            )  # complex64
         return freqs_cis
 
     def _reshape_cache(
