@@ -105,6 +105,21 @@ def _restore_tensor(local: torch.Tensor, source: torch.Tensor | None) -> torch.T
     )
 
 
+def _carry_type(out: torch.Tensor, src: torch.Tensor) -> torch.Tensor:
+    """Put ``src``'s SPMD type on ``out``. no_typecheck drops it."""
+    from torch.distributed.tensor import DTensor
+
+    if isinstance(out, DTensor) or isinstance(src, DTensor):
+        return out
+    typ = spmd.get_local_type(src)
+    if not typ:
+        return out
+    spec = spmd.get_partition_spec(src)
+    if spec is None:
+        return spmd.assert_type(out, typ)
+    return spmd.assert_type(out, typ, partition_spec=spec)
+
+
 @torch.compiler.disable
 def _pairwise_rms(values: torch.Tensor, norm: torch.nn.Module) -> torch.Tensor:
     """RMS over the last dimension with the same tree on CPU, CUDA, and NPU.
@@ -132,7 +147,10 @@ def _pairwise_rms(values: torch.Tensor, norm: torch.nn.Module) -> torch.Tensor:
             weight = getattr(norm, "weight", None)
             if weight is not None:
                 out = torch.mul(out, weight.float())
-    return _restore_tensor(out, source)
+    out = _restore_tensor(out, source)
+    if source is None:
+        out = _carry_type(out, values)
+    return out
 
 
 @torch.compiler.disable
@@ -166,7 +184,13 @@ def _rotate_with_cache(
         sin = real[..., 1].unsqueeze(-2)
         query_out = _rotate_pairs(query_local, cos, sin)
         key_out = _rotate_pairs(key_local, cos, sin)
-    return _restore_tensor(query_out, query_src), _restore_tensor(key_out, key_src)
+    query_out = _restore_tensor(query_out, query_src)
+    key_out = _restore_tensor(key_out, key_src)
+    if query_src is None:
+        query_out = _carry_type(query_out, query)
+    if key_src is None:
+        key_out = _carry_type(key_out, key)
+    return query_out, key_out
 
 
 class MuseSparkAttention(GQAttention):
