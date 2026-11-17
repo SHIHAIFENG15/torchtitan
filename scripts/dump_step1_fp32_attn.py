@@ -127,6 +127,8 @@ def _install() -> None:
             orig_branch = self.post_attention_norm.forward
             orig_residual = self.attention_residual.forward
             orig_ffn = self.feed_forward.forward
+            if getattr(attention, "rope", None) is not None:
+                captured["rope_cache"] = attention.rope.cache.detach()
 
             def attention_forward(*args, **kwargs):
                 if args and "attention_input" not in captured:
@@ -137,6 +139,8 @@ def _install() -> None:
 
             def qkv_forward(*args, **kwargs):
                 out = orig_qkv(*args, **kwargs)
+                captured.setdefault("raw_q", out[0].detach())
+                captured.setdefault("raw_k", out[1].detach())
                 captured.setdefault("value", out[2].detach())
                 return out
 
@@ -306,6 +310,8 @@ def _check(out_dir: str) -> int:
         "padding_mask",
         "block_input",
         "attention_input",
+        "raw_q",
+        "raw_k",
         "query",
         "key",
         "value",
