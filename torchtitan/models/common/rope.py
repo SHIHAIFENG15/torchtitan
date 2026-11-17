@@ -219,54 +219,53 @@ class ComplexRoPE(RoPE):
         end = cfg.max_context_length
         theta = cfg.theta
 
-        freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+        # The pow in inv_freq and polar vary across devices by ~1 ulp; t
+        # up to max_context_length amplifies the angle error to ~1.5e-5 and
+        # flips experts. Build the cache on the host so every device shares
+        # one bit pattern. Meta init keeps shape-only tensors.
+        ambient = torch.empty(0).device
+        with torch.device("meta" if ambient.type == "meta" else "cpu"):
+            freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
 
-        if cfg.scaling == "llama":
-            scaling_factor = cfg.scaling_factor
-            low_freq_factor = cfg.low_freq_factor
-            high_freq_factor = cfg.high_freq_factor
-            original_max_position_embeddings = cfg.original_max_position_embeddings
-            wavelen = 2 * math.pi / freqs
-            high_freq_wavelen = original_max_position_embeddings / high_freq_factor
-            low_freq_wavelen = original_max_position_embeddings / low_freq_factor
-            freqs = torch.where(
-                wavelen > low_freq_wavelen, freqs / scaling_factor, freqs
-            )
-            smooth_factor = (
-                original_max_position_embeddings / wavelen - low_freq_factor
-            ) / (high_freq_factor - low_freq_factor)
-            smoothed_freqs = (
-                1 - smooth_factor
-            ) * freqs / scaling_factor + smooth_factor * freqs
-            is_medium_freqs = ~(wavelen < high_freq_wavelen) * ~(
-                wavelen > low_freq_wavelen
-            )
-            freqs = torch.where(is_medium_freqs, smoothed_freqs, freqs)
-        elif cfg.scaling == "yarn" and cfg.rope_factor > 1.0:
-            # YaRN (DeepSeek V3 style)
-            freqs = _yarn_inv_freq(
-                dim,
-                theta,
-                cfg.rope_factor,
-                cfg.beta_fast,
-                cfg.beta_slow,
-                cfg.original_seq_len,
-                cfg.truncate,
-            )
+            if cfg.scaling == "llama":
+                scaling_factor = cfg.scaling_factor
+                low_freq_factor = cfg.low_freq_factor
+                high_freq_factor = cfg.high_freq_factor
+                original_max_position_embeddings = cfg.original_max_position_embeddings
+                wavelen = 2 * math.pi / freqs
+                high_freq_wavelen = original_max_position_embeddings / high_freq_factor
+                low_freq_wavelen = original_max_position_embeddings / low_freq_factor
+                freqs = torch.where(
+                    wavelen > low_freq_wavelen, freqs / scaling_factor, freqs
+                )
+                smooth_factor = (
+                    original_max_position_embeddings / wavelen - low_freq_factor
+                ) / (high_freq_factor - low_freq_factor)
+                smoothed_freqs = (
+                    1 - smooth_factor
+                ) * freqs / scaling_factor + smooth_factor * freqs
+                is_medium_freqs = ~(wavelen < high_freq_wavelen) * ~(
+                    wavelen > low_freq_wavelen
+                )
+                freqs = torch.where(is_medium_freqs, smoothed_freqs, freqs)
+            elif cfg.scaling == "yarn" and cfg.rope_factor > 1.0:
+                # YaRN (DeepSeek V3 style)
+                freqs = _yarn_inv_freq(
+                    dim,
+                    theta,
+                    cfg.rope_factor,
+                    cfg.beta_fast,
+                    cfg.beta_slow,
+                    cfg.original_seq_len,
+                    cfg.truncate,
+                )
 
-        t = torch.arange(end, device=freqs.device)
-        freqs = torch.outer(t, freqs).float()
-        # Device polar is libm-dependent: CUDA sin/cos differs from NPU/CPU by up
-        # to ~1.5e-5 at large angles, which was the last q/k divergence. The outer
-        # product above is exact on every device; only polar needs a shared host.
-        # Meta init has no data to move; the real recompute takes the host branch.
-        if freqs.is_meta:
-            freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
-        else:
-            freqs_cis = torch.polar(torch.ones_like(freqs.cpu()), freqs.cpu()).to(
-                freqs.device
-            )  # complex64
-        return freqs_cis
+            t = torch.arange(end)
+            freqs = torch.outer(t, freqs).float()
+            freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
+        if ambient.type == "meta":
+            return freqs_cis
+        return freqs_cis.to(ambient)
 
     def _reshape_cache(
         self,
