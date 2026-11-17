@@ -87,28 +87,52 @@ def build_dummy_audio_inputs(
     return waveforms_SC, waveform_padded_lengths_N
 
 
+def _local_tensor(values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
+    from torch.distributed.tensor import DTensor
+
+    if isinstance(values, DTensor):
+        return values.to_local(), values
+    return values, None
+
+
+def _restore_tensor(local: torch.Tensor, source: torch.Tensor | None) -> torch.Tensor:
+    from torch.distributed.tensor import DTensor
+
+    if source is None:
+        return local
+    return DTensor.from_local(
+        local, source.device_mesh, source.placements, run_check=False
+    )
+
+
 @torch.compiler.disable
 def _pairwise_rms(values: torch.Tensor, norm: torch.nn.Module) -> torch.Tensor:
     """RMS over the last dimension with the same tree on CPU, CUDA, and NPU.
 
     ``F.rms_norm`` reduces and calls libm rsqrt in an order the two devices do
     not share. Head dim is a power of two. The Newton rsqrt is the one already
-    used by the audio encoder.
+    used by the audio encoder. The tree runs on the local tensor: a dtype view
+    is not a legal sharded op.
     """
-    x = values.float()
-    width = x.shape[-1]
-    if width & (width - 1):
-        return norm(values)
-    reduced = torch.mul(x, x)
-    while reduced.shape[-1] > 1:
-        reduced = reduced.reshape(*reduced.shape[:-1], reduced.shape[-1] // 2, 2)
-        reduced = torch.add(reduced[..., 0], reduced[..., 1])
-    inv = _rsqrt_fp32(torch.add(torch.div(reduced, width), norm.eps))
-    out = torch.mul(x, inv)
-    weight = getattr(norm, "weight", None)
-    if weight is not None:
-        out = torch.mul(out, weight.float())
-    return out
+    local, source = _local_tensor(values)
+    with spmd.no_typecheck():
+        x = local.float()
+        width = x.shape[-1]
+        if width & (width - 1):
+            out = norm(local)
+        else:
+            reduced = torch.mul(x, x)
+            while reduced.shape[-1] > 1:
+                reduced = reduced.reshape(
+                    *reduced.shape[:-1], reduced.shape[-1] // 2, 2
+                )
+                reduced = torch.add(reduced[..., 0], reduced[..., 1])
+            inv = _rsqrt_fp32(torch.add(torch.div(reduced, width), norm.eps))
+            out = torch.mul(x, inv)
+            weight = getattr(norm, "weight", None)
+            if weight is not None:
+                out = torch.mul(out, weight.float())
+    return _restore_tensor(out, source)
 
 
 @torch.compiler.disable
@@ -128,11 +152,21 @@ def _rotate_with_cache(
     cache: torch.Tensor,
     positions: torch.Tensor | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    real = torch.view_as_real(cache)
-    real = real[: query.shape[0]] if positions is None else real[positions]
-    cos = real[..., 0].unsqueeze(-2)
-    sin = real[..., 1].unsqueeze(-2)
-    return _rotate_pairs(query, cos, sin), _rotate_pairs(key, cos, sin)
+    query_local, query_src = _local_tensor(query)
+    key_local, key_src = _local_tensor(key)
+    cache_local, _ = _local_tensor(cache)
+    pos_local, _ = _local_tensor(positions) if positions is not None else (None, None)
+    with spmd.no_typecheck():
+        real = torch.view_as_real(cache_local)
+        if pos_local is None:
+            real = real[: query_local.shape[0]]
+        else:
+            real = real[pos_local]
+        cos = real[..., 0].unsqueeze(-2)
+        sin = real[..., 1].unsqueeze(-2)
+        query_out = _rotate_pairs(query_local, cos, sin)
+        key_out = _rotate_pairs(key_local, cos, sin)
+    return _restore_tensor(query_out, query_src), _restore_tensor(key_out, key_src)
 
 
 class MuseSparkAttention(GQAttention):
