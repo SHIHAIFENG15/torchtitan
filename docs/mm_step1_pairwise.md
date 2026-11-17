@@ -2,7 +2,7 @@
 
 只跑 AllGatherKV 这一条，只跑第 1 步。不要跑 `docs/mm_acc_1000_rsqrt.md`，不要跑 1000 步，不要跑 Ulysses。
 
-`c7cce152` 的 dump 已经交过，不要再跑进 `outputs/step1_pairwise_gpu/`。那次 value 和 NPU 逐位相同，query 在 q/k norm 和 RoPE 之后最大差 1.6e-4，专家选择差 90 个 token。这次 HEAD 把 q/k RMS 和 RoPE 改成同一套不编译的 fp32 乘加，dump 脚本还加了 raw_q、raw_k（矩阵乘直接输出）和 rope_cache。只重跑这一步，输出写到新目录。
+`090fa6f6` 的 dump 已经交过（`outputs/step1_raw_gpu/`），不要再跑进去。那次 raw_q、raw_k、value 和 NPU 逐位相同，rope_cache 差 1.5e-5，专家选择差 90 个 token。HEAD `781ac7f0` 把缓存的 cos/sin 改到宿主 CPU 上算。只重跑这一步，输出写到新目录。
 
 在已经有 `outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0` 的同一棵树上执行。不要新克隆。不要改模型代码。不要重做 step-0。
 
@@ -18,7 +18,7 @@ git fetch origin npu-muse-spark-debug-r04
 git checkout npu-muse-spark-debug-r04
 git pull --ff-only origin npu-muse-spark-debug-r04
 test "$(git rev-parse HEAD)" != ""
-git grep -q _rotate_with_cache torchtitan/models/muse_spark/model.py
+git grep -q "torch.polar(torch.ones_like(freqs.cpu())" torchtitan/models/common/rope.py
 test -f scripts/dump_step1_fp32_attn.py
 test -d outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0
 ```
@@ -45,9 +45,9 @@ python scripts/dump_step1_fp32_attn.py \
   --config muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4 \
   --ngpu 8 \
   --load outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0 \
-  --out outputs/step1_raw_gpu/mm_fsdp2_tp2_cp2_ep4 \
-  --tb tb_step1_raw_gpu/mm_fsdp2_tp2_cp2_ep4 \
-  > logs/step1_raw_gpu_mm_fsdp2.log 2>&1
+  --out outputs/step1_cpu_cache_gpu/mm_fsdp2_tp2_cp2_ep4 \
+  --tb tb_step1_cpu_cache_gpu/mm_fsdp2_tp2_cp2_ep4 \
+  > logs/step1_cpu_cache_gpu_mm_fsdp2.log 2>&1
 echo EXIT:$?
 ```
 
@@ -55,6 +55,6 @@ echo EXIT:$?
 
 ## 怎样算交数完成
 
-8 个 `.pt` 都在 `outputs/step1_raw_gpu/mm_fsdp2_tp2_cp2_ep4/`。每个 rank 的 `layer0` 里要有 `raw_q`、`raw_k` 和 `rope_cache`，缺失就是 HEAD 不对，停下别跑。记下 step 1 的 loss、grad_norm 和 `git rev-parse HEAD`。`.pt` 可以提交到本分支。不要提交 tensorboard 目录和日志。不要覆盖 `outputs/step1_pairwise_gpu/`。NPU 对照在 A5 的 `outputs/step1_raw/mm_fsdp2_tp2_cp2_ep4/`。
+8 个 `.pt` 都在 `outputs/step1_cpu_cache_gpu/mm_fsdp2_tp2_cp2_ep4/`。每个 rank 的 `layer0` 里要有 `raw_q`、`raw_k` 和 `rope_cache`，缺失就是 HEAD 不对，停下别跑。记下 step 1 的 loss、grad_norm 和 `git rev-parse HEAD`。`.pt` 可以提交到本分支。不要提交 tensorboard 目录和日志。不要覆盖 `outputs/step1_raw_gpu/`。NPU 对照在 A5 的 `outputs/step1_cpu_cache/mm_fsdp2_tp2_cp2_ep4/`。
 
 本说明由 AI 助手根据 NPU 已跑完的第 1 步整理。
