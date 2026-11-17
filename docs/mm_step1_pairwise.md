@@ -2,7 +2,7 @@
 
 只跑 AllGatherKV 这一条，只跑第 1 步。不要跑 `docs/mm_acc_1000_rsqrt.md`，不要跑 1000 步，不要跑 Ulysses。
 
-NPU 已经用同一份代码跑完这一步。`wo` 改成各卡本地成对相加之后，layer0 的 Q、attention 输出、`ffn_input` 和 8 层 expert id 与上一份 NPU dump 逐位相同。和旧的 GPU dump（`9934c577`，CUDA `mm(out_dtype=float32)`）比，专家选择仍差 57 个 token。那份旧 dump 不能当目标。这次要的是 GPU 在 `ddf5dd7b` 或更新的 HEAD 上重跑，和 NPU 的 `outputs/step1_pairwise_wo/` 比。
+`c7cce152` 的 dump 已经交过，不要再跑进 `outputs/step1_pairwise_gpu/`。那次 value 和 NPU 逐位相同，query 在 q/k norm 和 RoPE 之后最大差 1.6e-4，专家选择差 90 个 token。这次 HEAD 把 q/k RMS 和 RoPE 改成同一套不编译的 fp32 乘加。只重跑这一步，输出写到新目录。
 
 在已经有 `outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0` 的同一棵树上执行。不要新克隆。不要改模型代码。不要重做 step-0。
 
@@ -18,12 +18,12 @@ git fetch origin npu-muse-spark-debug-r04
 git checkout npu-muse-spark-debug-r04
 git pull --ff-only origin npu-muse-spark-debug-r04
 test "$(git rev-parse HEAD)" != ""
-git merge-base --is-ancestor ddf5dd7b HEAD
+git grep -q _rotate_with_cache torchtitan/models/muse_spark/model.py
 test -f scripts/dump_step1_fp32_attn.py
 test -d outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0
 ```
 
-远端名是 `shihaifeng` 时，把上面的 `origin` 换成 `shihaifeng`。HEAD 必须包含 `ddf5dd7b`。导入 Muse 模型时会执行 `os.environ.setdefault("MUSE_PAIRWISE_GEMM", "1")`，不要把它关掉，也不要另设 `MM_DTYPE_REDUCED_PRECISION`。
+远端名是 `shihaifeng` 时，把上面的 `origin` 换成 `shihaifeng`。`model.py` 里要有 `_rotate_with_cache`。导入 Muse 模型时会执行 `os.environ.setdefault("MUSE_PAIRWISE_GEMM", "1")`，不要把它关掉，也不要另设 `MM_DTYPE_REDUCED_PRECISION`。
 
 ## 环境
 
@@ -45,9 +45,9 @@ python scripts/dump_step1_fp32_attn.py \
   --config muse_spark_debugmodel_mm_fsdp2_tp2_cp2_ep4 \
   --ngpu 8 \
   --load outputs/checkpoint-mm_fsdp2_tp2_cp2_ep4/step-0 \
-  --out outputs/step1_pairwise_gpu/mm_fsdp2_tp2_cp2_ep4 \
-  --tb tb_step1_pairwise_gpu/mm_fsdp2_tp2_cp2_ep4 \
-  > logs/step1_pairwise_gpu_mm_fsdp2.log 2>&1
+  --out outputs/step1_qk_gpu/mm_fsdp2_tp2_cp2_ep4 \
+  --tb tb_step1_qk_gpu/mm_fsdp2_tp2_cp2_ep4 \
+  > logs/step1_qk_gpu_mm_fsdp2.log 2>&1
 echo EXIT:$?
 ```
 
@@ -55,6 +55,6 @@ echo EXIT:$?
 
 ## 怎样算交数完成
 
-8 个 `.pt` 都在 `outputs/step1_pairwise_gpu/mm_fsdp2_tp2_cp2_ep4/`。记下 step 1 的 loss、grad_norm 和 `git rev-parse HEAD`。`.pt` 可以提交到本分支。不要提交 tensorboard 目录和日志。不要和 `9934c577` 的旧 expert id 判断通过与否。NPU 对照文件在 A5 的 `outputs/step1_pairwise_wo/mm_fsdp2_tp2_cp2_ep4/`。
+8 个 `.pt` 都在 `outputs/step1_qk_gpu/mm_fsdp2_tp2_cp2_ep4/`。记下 step 1 的 loss、grad_norm 和 `git rev-parse HEAD`。`.pt` 可以提交到本分支。不要提交 tensorboard 目录和日志。不要覆盖 `outputs/step1_pairwise_gpu/`。NPU 对照会写到 A5 的 `outputs/step1_qk/mm_fsdp2_tp2_cp2_ep4/`。
 
 本说明由 AI 助手根据 NPU 已跑完的第 1 步整理。

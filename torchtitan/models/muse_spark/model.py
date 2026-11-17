@@ -56,7 +56,7 @@ from torchtitan.models.common.multimodal import (
 from torchtitan.models.common.nn_modules import RMSNorm
 from torchtitan.models.common.vision_encoder_sharding import multimodal_input_sharding
 
-from torchtitan.models.muse_spark.audio_encoder import MuseSparkAudioEncoder
+from torchtitan.models.muse_spark.audio_encoder import MuseSparkAudioEncoder, _rsqrt_fp32
 from torchtitan.models.muse_spark.state_dict_adapter import MuseSparkStateDictAdapter
 from torchtitan.models.muse_spark.vision_encoder import (
     MuseSparkNaViTAdapter,
@@ -85,6 +85,54 @@ def build_dummy_audio_inputs(
             spmd.mutate_type(tensor, "tp", src=spmd.R, dst=spmd.I)
             spmd.mutate_type(tensor, "cp", src=spmd.R, dst=spmd.I)
     return waveforms_SC, waveform_padded_lengths_N
+
+
+@torch.compiler.disable
+def _pairwise_rms(values: torch.Tensor, norm: torch.nn.Module) -> torch.Tensor:
+    """RMS over the last dimension with the same tree on CPU, CUDA, and NPU.
+
+    ``F.rms_norm`` reduces and calls libm rsqrt in an order the two devices do
+    not share. Head dim is a power of two. The Newton rsqrt is the one already
+    used by the audio encoder.
+    """
+    x = values.float()
+    width = x.shape[-1]
+    if width & (width - 1):
+        return norm(values)
+    reduced = torch.mul(x, x)
+    while reduced.shape[-1] > 1:
+        reduced = reduced.reshape(*reduced.shape[:-1], reduced.shape[-1] // 2, 2)
+        reduced = torch.add(reduced[..., 0], reduced[..., 1])
+    inv = _rsqrt_fp32(torch.add(torch.div(reduced, width), norm.eps))
+    out = torch.mul(x, inv)
+    weight = getattr(norm, "weight", None)
+    if weight is not None:
+        out = torch.mul(out, weight.float())
+    return out
+
+
+@torch.compiler.disable
+def _rotate_pairs(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Rotate adjacent pairs with separate fp32 mul/add. No complex multiply."""
+    paired = x.float().reshape(*x.shape[:-1], x.shape[-1] // 2, 2)
+    even, odd = paired[..., 0], paired[..., 1]
+    out_even = torch.sub(torch.mul(even, cos), torch.mul(odd, sin))
+    out_odd = torch.add(torch.mul(even, sin), torch.mul(odd, cos))
+    return torch.stack((out_even, out_odd), dim=-1).flatten(-2)
+
+
+@torch.compiler.disable
+def _rotate_with_cache(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    cache: torch.Tensor,
+    positions: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    real = torch.view_as_real(cache)
+    real = real[: query.shape[0]] if positions is None else real[positions]
+    cos = real[..., 0].unsqueeze(-2)
+    sin = real[..., 1].unsqueeze(-2)
+    return _rotate_pairs(query, cos, sin), _rotate_pairs(key, cos, sin)
 
 
 class MuseSparkAttention(GQAttention):
@@ -152,30 +200,25 @@ class MuseSparkAttention(GQAttention):
         output_TD = self.wo(output_TO)
         return output_TD
 
-    # Limit 16: RoPE and no-RoPE layers share this region and use 8 graphs, exactly the default limit.
-    # No pointwise autotuning, as in ComplexRoPE.forward: RoPE is inlined here, so this region's options apply.
-    @local_compile(
-        "muse_spark_attention_qk",
-        batch_invariant=False,
-        recompile_limit=16,
-        options={"triton.autotune_pointwise": False},
-    )
+    @torch.compiler.disable
     def _prepare_query_and_key(
         self,
         query_TNH: torch.Tensor,
         key_TKH: torch.Tensor,
         positions: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return the query and key as attention reads them. Each step runs only if configured.
+        """Return the query and key as attention reads them.
 
-        query: q_norm -> * scale_query_by -> * position temperature -> RoPE
-        key:   k_norm -> RoPE
+        query: pairwise RMS -> * scale_query_by -> * position temperature -> real RoPE
+        key:   pairwise RMS -> real RoPE
+        Compiled rms and complex RoPE were the first split after a matching V.
         """
+        out_dtype = query_TNH.dtype
         if self.q_norm is not None or self.k_norm is not None:
             if self.q_norm is None or self.k_norm is None:
                 raise ValueError("MuseSparkAttention needs both q_norm and k_norm.")
-            query_TNH = self.q_norm(query_TNH) * self.scale_query_by
-            key_TKH = self.k_norm(key_TKH)
+            query_TNH = torch.mul(_pairwise_rms(query_TNH, self.q_norm), self.scale_query_by)
+            key_TKH = _pairwise_rms(key_TKH, self.k_norm)
 
         floor_scale = self.position_temperature_floor_scale
         query_scale = self.position_temperature_query_scale
@@ -184,16 +227,20 @@ class MuseSparkAttention(GQAttention):
                 raise ValueError(
                     "positions are required for attention temperature tuning"
                 )
-            temperature_T = (
-                torch.log((positions.float() + 1.0) / floor_scale) * query_scale + 1.0
+            temperature_T = torch.add(
+                torch.mul(
+                    torch.log(torch.div(torch.add(positions.float(), 1.0), floor_scale)),
+                    query_scale,
+                ),
+                1.0,
             ).clamp_min(1.0)
-            query_TNH = (query_TNH * temperature_T.reshape(-1, 1, 1)).to(
-                query_TNH.dtype
-            )
+            query_TNH = torch.mul(query_TNH, temperature_T.reshape(-1, 1, 1))
 
         if self.rope is not None:
-            query_TNH, key_TKH = self.rope(query_TNH, key_TKH, positions)
-        return query_TNH, key_TKH
+            query_TNH, key_TKH = _rotate_with_cache(
+                query_TNH, key_TKH, self.rope.cache, positions
+            )
+        return query_TNH.to(out_dtype), key_TKH.to(out_dtype)
 
     @local_compile("muse_spark_attention_output", batch_invariant=False)
     def _flatten_attention_output(
@@ -204,7 +251,7 @@ class MuseSparkAttention(GQAttention):
         """Flatten the heads, applying the configured per-head norm and sigmoid gate."""
         output_TNH = output_TNH.contiguous()
         if self.output_norm is not None:
-            output_TNH = self.output_norm(output_TNH)
+            output_TNH = _pairwise_rms(output_TNH, self.output_norm).to(output_TNH.dtype)
         output_TO = output_TNH.reshape(output_TNH.shape[0], -1)
         if output_gate_TO is not None:
             output_TO = output_TO * torch.sigmoid(output_gate_TO)
