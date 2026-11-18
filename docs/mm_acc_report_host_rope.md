@@ -18,16 +18,22 @@ step-0、同一套 `run_acc.py` 各 1000 步跑批，以及 step-1 逐位 dump �
 
 ## 定位与修复链
 
-| 轮次 | 根因 | 修复 | 提交 |
-| --- | --- | --- | --- |
-| pairwise | TP 分片下 QKV 投影归约顺序不同 | 共享 pairwise fp32 GEMM | `00cd5bc2`..`484ddeca` |
-| qk norm + RoPE | 每侧各自实现 | 共享 fp32 q/k norm + RoPE，局部张量执行 | `68279566`..`c578caf7` |
-| host polar | 设备端 `polar` 的 sin/cos 跨设备差 ~1.5e-5 | `polar` 移到 host | `781ac7f0`, `8733147a` |
-| 本轮 | 角度表里 CUDA `pow` 比 CPU/NPU 少 1 ulp，被 t<=511 放大成 1.5e-5 角度差 | inv_freq + scaling + 外积 + polar 全部在 host 构建 | `e284eff1` |
-| 顺带抢救 | NPU `F.grid_sample` backward 产生非有限值（A5 工作区未提交修复） | 纯 torch 双线性实现入库 | `1628fc9` |
+| 轮次 | 根因 | 修复 | 提交 | 路径 |
+| --- | --- | --- | --- | --- |
+| pairwise | TP 分片下 QKV 投影归约顺序不同 | 共享 pairwise fp32 GEMM | `00cd5bc2`..`484ddeca` | 调试门控（`MUSE_PAIRWISE_GEMM=1`），验收跑不启用 |
+| qk norm + RoPE | 每侧各自实现 | 共享 fp32 q/k norm 链 + fp32 旋转，局部张量执行 | `68279566`..`c578caf7` | 模型路径，验收生效 |
+| host polar | 设备端 `polar` 的 sin/cos 跨设备差 ~1.5e-5 | `polar` 移到 host | `781ac7f0`, `8733147a` | 被 `e284eff1` 取代 |
+| 本轮 | 角度表里 CUDA `pow` 比 CPU/NPU 少 1 ulp，被 t<=511 放大成 1.5e-5 角度差 | inv_freq + scaling + 外积 + polar 全部在 host 构建 | `e284eff1` | 模型路径，验收生效 |
+| 顺带抢救 | NPU `F.grid_sample` backward 产生非有限值（A5 工作区未提交修复） | 纯 torch 双线性实现入库 | `1628fc9` | 模型路径，NPU 正确性 |
 
 `e284eff1` 的验证：host 重建的 cache 与 NPU dump **逐位相同**（0.0），
 与修复前 GPU dump 差 1.5303e-5，即整段跨设备差异全部来自 CUDA `pow`。
+
+必要的模型修复为三组：共享 fp32 q/k norm 链、全 host RoPE cache、NPU
+grid_sample 绕过。pairwise fp32 GEMM 与各 step-1 dump 脚本不改变验收
+运行的模型行为，是定位与验证工具（证据链交付件）；验收 1000 步跑不设
+`MUSE_PAIRWISE_GEMM`，QKV 投影仍走各设备原生的 mm 核，其归约差归入
+噪声项。
 
 ## Step-1 逐位验证（`39308c19` GPU dump vs A5 NPU `step1_cpu_cache`）
 
