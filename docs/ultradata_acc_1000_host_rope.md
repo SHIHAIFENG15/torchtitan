@@ -1,6 +1,6 @@
 # UltraData 32K LoRA 1000 步精度：host-rope 后复跑（GPU）
 
-补齐验收表中未执行的 UltraData 32K LoRA 行。只跑这一条，1000 步。代码必须包含 `1628fc9`（RoPE cache 全 host 构建 `e284eff1` + NPU grid_sample 绕过；两侧同用纯 torch 双线性，少一处设备核差异）。文本、多模态、性能和显存都不要跑。
+补齐验收表中未执行的 UltraData 32K LoRA 行。只跑这一条，1000 步。代码必须包含 `e8b4527`（含 RoPE cache 全 host 构建 `e284eff1`、NPU grid_sample 绕过 `1628fc9`、pairwise 树按行分块——32K 序列下不分块的 pairwise 广播约需 200 GiB，A100 会同样 OOM）。文本、多模态、性能和显存都不要跑。
 
 不要重做 step-0。不要覆盖这些已有文件：
 
@@ -12,7 +12,7 @@
 
 - `nvidia-smi` 上有别人的训练。不要杀。常驻的 `atk server` 可以忽略。
 - 工作区不干净，或者当前分支不是 `npu-muse-spark-debug-r04`。
-- `git merge-base --is-ancestor 1628fc9 HEAD` 失败。
+- `git merge-base --is-ancestor e8b4527 HEAD` 失败。
 - `torchtitan/models/common/rope.py` 里没有 `ambient = torch.empty(0).device`。
 - step-0 目录不存在。
 
@@ -20,7 +20,7 @@
 git fetch origin npu-muse-spark-debug-r04
 git checkout npu-muse-spark-debug-r04
 git pull --ff-only origin npu-muse-spark-debug-r04
-git merge-base --is-ancestor 1628fc9 HEAD
+git merge-base --is-ancestor e8b4527 HEAD
 grep -n "ambient = torch.empty(0).device" torchtitan/models/common/rope.py
 test -f run_acc.py
 test -d outputs/checkpoint-ultradata_lora/step-0
