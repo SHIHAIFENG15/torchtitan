@@ -58,11 +58,21 @@ def _pairwise_tree(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         w = torch.nn.functional.pad(w, (0, padded - k))
     # Do not slice the output dimension. Column-parallel weights are sharded
     # there, and a slice is an implicit reshard.
-    partial = torch.mul(x[:, None, :], w[None, :, :])
-    while partial.shape[-1] > 1:
-        partial = partial.reshape(*partial.shape[:-1], partial.shape[-1] // 2, 2)
-        partial = torch.add(partial[..., 0], partial[..., 1])
-    return partial.reshape(partial.shape[0], partial.shape[1])
+    # The (M, N, K) broadcast needs M*N*K floats and a 32K-token sequence asks
+    # for ~200 GiB. Rows reduce independently, so chunking M caps the peak
+    # memory without changing any per-row arithmetic: the output is
+    # bit-identical to the unchunked tree.
+    n, kp = w.shape
+    chunk = max(1, (4 << 30) // max(1, n * kp * 4))
+    rows = []
+    for start in range(0, x.shape[0], chunk):
+        xi = x[start : start + chunk]
+        partial = torch.mul(xi[:, None, :], w[None, :, :])
+        while partial.shape[-1] > 1:
+            partial = partial.reshape(*partial.shape[:-1], partial.shape[-1] // 2, 2)
+            partial = torch.add(partial[..., 0], partial[..., 1])
+        rows.append(partial.reshape(partial.shape[0], partial.shape[1]))
+    return rows[0] if len(rows) == 1 else torch.cat(rows, dim=0)
 
 
 def _pairwise_on_sharded_k(
