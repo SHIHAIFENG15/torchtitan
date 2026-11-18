@@ -48,6 +48,44 @@ def _identity_rope(
     return query_TNH, key_TNH
 
 
+def _bilinear_grid_sample(inp: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
+    """Bilinear sample, align_corners=False, zero padding.
+
+    NPU F.grid_sample backward inflates one positional-embedding element by
+    about 1e4 on the live autograd graph, and the next step is non-finite.
+    Indexing matches CPU bilinear.
+    """
+    n, c, h, w = inp.shape
+    x = grid[..., 0].float()
+    y = grid[..., 1].float()
+    ix = ((x + 1) * w - 1) / 2
+    iy = ((y + 1) * h - 1) / 2
+    ix0 = ix.floor()
+    iy0 = iy.floor()
+    wx1 = (ix - ix0).to(inp.dtype)
+    wy1 = (iy - iy0).to(inp.dtype)
+    wx0 = 1 - wx1
+    wy0 = 1 - wy1
+
+    def gather(iy_s, ix_s, weight):
+        valid = (iy_s >= 0) & (iy_s <= h - 1) & (ix_s >= 0) & (ix_s <= w - 1)
+        iy_c = iy_s.clamp(0, h - 1).long()
+        ix_c = ix_s.clamp(0, w - 1).long()
+        flat = inp.reshape(n, c, h * w)
+        index = (iy_c * w + ix_c).reshape(n, 1, -1).expand(n, c, -1)
+        val = flat.gather(2, index)
+        mask = valid.reshape(n, 1, -1).to(weight.dtype)
+        return val * (weight.reshape(n, 1, -1) * mask)
+
+    out = (
+        gather(iy0, ix0, wy0 * wx0)
+        + gather(iy0, ix0 + 1, wy0 * wx1)
+        + gather(iy0 + 1, ix0, wy1 * wx0)
+        + gather(iy0 + 1, ix0 + 1, wy1 * wx1)
+    )
+    return out.reshape(n, c, grid.shape[-3], grid.shape[-2])
+
+
 def _annotate_vision_activation_type(tensor: torch.Tensor) -> torch.Tensor:
     if spmd.is_type_checking():
         return spmd.mutate_type(
@@ -255,12 +293,15 @@ class NaViTEncoder(Module):
                 1, 1, grid_h * grid_w, 2
             )
         pos_xy = _annotate_vision_activation_type(pos_xy)
-        sampled = F.grid_sample(
-            pos_emb_DHW,
-            pos_xy,
-            mode=self.grid_sample_mode,
-            align_corners=False,
-        )
+        if self.grid_sample_mode == "bilinear":
+            sampled = _bilinear_grid_sample(pos_emb_DHW, pos_xy)
+        else:
+            sampled = F.grid_sample(
+                pos_emb_DHW,
+                pos_xy,
+                mode=self.grid_sample_mode,
+                align_corners=False,
+            )
         return sampled[0, :, 0].transpose(0, 1)
 
     def _pixel_shuffle_downsample(
